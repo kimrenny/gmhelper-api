@@ -1,4 +1,4 @@
-﻿using DotNetEnv;
+using DotNetEnv;
 using MatHelper.BLL.Interfaces;
 using MatHelper.BLL.Mappers;
 using MatHelper.BLL.Services;
@@ -17,37 +17,54 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProgram> where TProgram : class
 {
+    public CustomWebApplicationFactory()
+    {
+        InitializeTestEnvironment();
+    }
+
+    private static void InitializeTestEnvironment()
+    {
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "IntegrationTest");
+
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current != null)
+        {
+            var envPath = Path.Combine(current.FullName, ".env.test");
+            if (File.Exists(envPath))
+            {
+                foreach (var line in File.ReadAllLines(envPath))
+                {
+                    if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#"))
+                        continue;
+
+                    var parts = line.Split('=', 2);
+                    if (parts.Length != 2)
+                        continue;
+
+                    var key = parts[0].Trim();
+                    var value = parts[1].Trim().Trim('"');
+
+                    if (Environment.GetEnvironmentVariable(key) == null)
+                    {
+                        Environment.SetEnvironmentVariable(key, value);
+                    }
+                }
+                break;
+            }
+            current = current.Parent;
+        }
+
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CORS_ORIGINS")))
+        {
+            Environment.SetEnvironmentVariable("CORS_ORIGINS", "https://localhost:4200;http://localhost:4200");
+        }
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("IntegrationTest");
 
         builder.UseSetting("https_port", "5001");
-
-        var projectDir = System.IO.Path.GetFullPath("../../../../");
-        var envPath = Path.Combine(projectDir, ".env.test");
-
-        if (File.Exists(envPath))
-        {
-            var lines = File.ReadAllLines(envPath);
-
-            foreach (var line in lines)
-            {
-                if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#"))
-                    continue;
-
-                var parts = line.Split('=', 2);
-                if (parts.Length != 2)
-                    continue;
-
-                var key = parts[0].Trim();
-                var value = parts[1].Trim();
-
-                if (Environment.GetEnvironmentVariable(key) == null)
-                {
-                    Environment.SetEnvironmentVariable(key, value);
-                }
-            }
-        }
 
         builder.ConfigureTestServices(services =>
         {

@@ -13,5 +13,6 @@ namespace MatHelper.BLL.Interfaces
         Task SaveUserAvatarAsync(Guid userId, byte[] avatarBytes);
         Task UpdateUserAsync(Guid userId, UpdateUserRequest request);
         Task UpdateUserLanguageAsync(Guid userId, LanguageType language);
+        Task<InternalUserDto?> GetInternalUserByIdAsync(Guid userId);
     }
 }

@@ -155,5 +155,32 @@ namespace MatHelper.BLL.Services
             user.Language = language;
             await _userRepository.UpdateUserAsync(user);
         }
+
+        public async Task<InternalUserDto?> GetInternalUserByIdAsync(Guid userId)
+        {
+            if (userId == Guid.Empty)
+            {
+                return null;
+            }
+
+            var user = await _userRepository.GetUserAsync(u => u.Id == userId);
+            if (user == null)
+            {
+                _logger.LogInformation("Internal user lookup: User with ID {UserId} not found.", userId);
+                return null;
+            }
+
+            return new InternalUserDto
+            {
+                Id = user.Id,
+                Username = user.Username,
+                Email = user.Email,
+                Role = user.Role,
+                Language = user.Language.ToString(),
+                IsActive = user.IsActive,
+                IsBlocked = user.IsBlocked,
+                RegistrationDate = user.RegistrationDate
+            };
+        }
     }
 }

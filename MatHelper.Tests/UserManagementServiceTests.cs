@@ -1,4 +1,4 @@
-﻿using MatHelper.BLL.Interfaces;
+using MatHelper.BLL.Interfaces;
 using MatHelper.BLL.Services;
 using MatHelper.CORE.Enums;
 using MatHelper.CORE.Models;
@@ -227,6 +227,89 @@ namespace MatHelper.Tests.Services
             await _service.UpdateUserLanguageAsync(userId, LanguageType.EN);
 
             Assert.Equal(LanguageType.EN, user.Language);
+        }
+
+        [Fact]
+        public async Task GetInternalUserByIdAsync_ReturnsInternalUserDto_WhenUserExists()
+        {
+            var userId = Guid.NewGuid();
+            var regDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+            var user = new User
+            {
+                Id = userId,
+                Username = "johndoe",
+                Email = "john@example.com",
+                PasswordHash = "super-secret-hash",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = regDate,
+            };
+
+            _userRepoMock.Setup(r => r.GetUserAsync(It.IsAny<System.Linq.Expressions.Expression<Func<User, bool>>>()))
+                .ReturnsAsync(user);
+
+            var result = await _service.GetInternalUserByIdAsync(userId);
+
+            Assert.NotNull(result);
+            Assert.Equal(userId, result.Id);
+            Assert.Equal("johndoe", result.Username);
+            Assert.Equal("john@example.com", result.Email);
+            Assert.Equal("User", result.Role);
+            Assert.Equal("EN", result.Language);
+            Assert.True(result.IsActive);
+            Assert.False(result.IsBlocked);
+            Assert.Equal(regDate, result.RegistrationDate);
+        }
+
+        [Fact]
+        public async Task GetInternalUserByIdAsync_ReturnsNull_WhenUserDoesNotExist()
+        {
+            var userId = Guid.NewGuid();
+            _userRepoMock.Setup(r => r.GetUserAsync(It.IsAny<System.Linq.Expressions.Expression<Func<User, bool>>>()))
+                .ReturnsAsync((User?)null);
+
+            var result = await _service.GetInternalUserByIdAsync(userId);
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public async Task GetInternalUserByIdAsync_ReturnsNull_WhenIdIsEmpty()
+        {
+            var result = await _service.GetInternalUserByIdAsync(Guid.Empty);
+
+            Assert.Null(result);
+            _userRepoMock.Verify(r => r.GetUserAsync(It.IsAny<System.Linq.Expressions.Expression<Func<User, bool>>>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task GetInternalUserByIdAsync_ReturnsBlockedUser_WithoutThrowing()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "blockeduser",
+                Email = "blocked@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                Language = LanguageType.RU,
+                IsActive = false,
+                IsBlocked = true,
+                RegistrationDate = DateTime.UtcNow,
+            };
+
+            _userRepoMock.Setup(r => r.GetUserAsync(It.IsAny<System.Linq.Expressions.Expression<Func<User, bool>>>()))
+                .ReturnsAsync(user);
+
+            var result = await _service.GetInternalUserByIdAsync(userId);
+
+            Assert.NotNull(result);
+            Assert.True(result.IsBlocked);
+            Assert.False(result.IsActive);
+            Assert.Equal("RU", result.Language);
         }
     }
 }

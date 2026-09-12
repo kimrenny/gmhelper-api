@@ -29,6 +29,7 @@
     <ProjectReference Include="..\MatHelper.BLL\MatHelper.BLL.csproj" />
     <ProjectReference Include="..\MatHelper.DAL\MatHelper.DAL.csproj" />
     <ProjectReference Include="..\MatHelper.CORE\MatHelper.CORE.csproj" />
+    <ProjectReference Include="..\MatHelper.API\MatHelper.API.csproj" />
     <ProjectReference Include="..\MatHelper.Protos\MatHelper.Protos.csproj" />
   </ItemGroup>
 
