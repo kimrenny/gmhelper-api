@@ -225,6 +225,24 @@ namespace MatHelper.DAL.Repositories
             return groupedByDate;
         }
 
+        public async Task<List<User>> SearchUsersAsync(string query, int limit = 20)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return new List<User>();
+            }
+
+            var trimmed = query.Trim().ToLower();
+            var effectiveLimit = limit <= 0 ? 20 : Math.Min(limit, 50);
+
+            return await _context.Users
+                .Where(u => u.Username.ToLower().Contains(trimmed) || u.Email.ToLower().Contains(trimmed))
+                .OrderBy(u => u.Username)
+                .ThenBy(u => u.Email)
+                .Take(effectiveLimit)
+                .ToListAsync();
+        }
+
         private void ValidateEmailOrUsername(string value, string fieldName)
         {
             if (string.IsNullOrWhiteSpace(value))

@@ -311,5 +311,83 @@ namespace MatHelper.Tests.Services
             Assert.False(result.IsActive);
             Assert.Equal("RU", result.Language);
         }
+
+        [Fact]
+        public async Task SearchInternalUsersAsync_ReturnsInternalUserDtos_WhenMatchingUsersExist()
+        {
+            var userId1 = Guid.NewGuid();
+            var userId2 = Guid.NewGuid();
+            var regDate1 = new DateTime(2026, 1, 1, 10, 0, 0, DateTimeKind.Utc);
+            var regDate2 = new DateTime(2026, 1, 2, 10, 0, 0, DateTimeKind.Utc);
+
+            var users = new List<User>
+            {
+                new()
+                {
+                    Id = userId1,
+                    Username = "alice",
+                    Email = "alice@example.com",
+                    PasswordHash = "hashed-pass-1",
+                    Avatar = new byte[] { 1, 2, 3 },
+                    Role = "Admin",
+                    Language = LanguageType.EN,
+                    IsActive = true,
+                    IsBlocked = false,
+                    RegistrationDate = regDate1
+                },
+                new()
+                {
+                    Id = userId2,
+                    Username = "bob",
+                    Email = "bob@example.com",
+                    PasswordHash = "hashed-pass-2",
+                    Avatar = null,
+                    Role = "User",
+                    Language = LanguageType.RU,
+                    IsActive = false,
+                    IsBlocked = true,
+                    RegistrationDate = regDate2
+                }
+            };
+
+            _userRepoMock.Setup(r => r.SearchUsersAsync("example", 20))
+                .ReturnsAsync(users);
+
+            var result = await _service.SearchInternalUsersAsync("example", 20);
+
+            Assert.NotNull(result);
+            Assert.Equal(2, result.Count);
+
+            Assert.Equal(userId1, result[0].Id);
+            Assert.Equal("alice", result[0].Username);
+            Assert.Equal("alice@example.com", result[0].Email);
+            Assert.Equal("Admin", result[0].Role);
+            Assert.Equal("EN", result[0].Language);
+            Assert.True(result[0].IsActive);
+            Assert.False(result[0].IsBlocked);
+            Assert.Equal(regDate1, result[0].RegistrationDate);
+
+            Assert.Equal(userId2, result[1].Id);
+            Assert.Equal("bob", result[1].Username);
+            Assert.Equal("bob@example.com", result[1].Email);
+            Assert.Equal("User", result[1].Role);
+            Assert.Equal("RU", result[1].Language);
+            Assert.False(result[1].IsActive);
+            Assert.True(result[1].IsBlocked);
+            Assert.Equal(regDate2, result[1].RegistrationDate);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        public async Task SearchInternalUsersAsync_ReturnsEmptyList_WhenQueryIsNullOrWhitespace(string? query)
+        {
+            var result = await _service.SearchInternalUsersAsync(query!, 20);
+
+            Assert.NotNull(result);
+            Assert.Empty(result);
+            _userRepoMock.Verify(r => r.SearchUsersAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+        }
     }
 }

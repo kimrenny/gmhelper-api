@@ -1,4 +1,4 @@
-﻿using MatHelper.CORE.Enums;
+using MatHelper.CORE.Enums;
 using MatHelper.CORE.Models;
 using System.Linq.Expressions;
 
@@ -31,6 +31,8 @@ namespace MatHelper.DAL.Interfaces
         Task ActionUserAsync(Guid id, UserAction action);
 
         Task<List<RegistrationsDto>> GetUserRegistrationsGroupedByDateAsync();
+
+        Task<List<User>> SearchUsersAsync(string query, int limit = 20);
 
         Task SaveChangesAsync();
     }

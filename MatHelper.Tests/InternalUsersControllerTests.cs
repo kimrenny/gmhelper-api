@@ -275,5 +275,220 @@ namespace MatHelper.Tests.Controllers
 
             Assert.IsType<ForbidResult>(actionResult);
         }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsOk_WithInternalUserDtos_WhenAuthorizedAsService()
+        {
+            var expectedUsers = new List<InternalUserDto>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    Username = "alice",
+                    Email = "alice@example.com",
+                    Role = "User",
+                    Language = "EN",
+                    IsActive = true,
+                    IsBlocked = false,
+                    RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+                }
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[]
+                {
+                    new Claim(ClaimTypes.Role, "Service"),
+                    new Claim(ClaimTypes.Name, "gmhelper-notify-api")
+                }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.SearchInternalUsersAsync("ali", 20))
+                .ReturnsAsync(expectedUsers);
+
+            var actionResult = await _controller.SearchUsers("ali", 20);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<List<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            Assert.Single(apiResponse.Data);
+            Assert.Equal("alice", apiResponse.Data[0].Username);
+            Assert.Equal("alice@example.com", apiResponse.Data[0].Email);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsOk_WhenAuthorizedAsAdmin()
+        {
+            var expectedUsers = new List<InternalUserDto>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    Username = "bob",
+                    Email = "bob@example.com",
+                    Role = "User",
+                    Language = "EN",
+                    IsActive = true,
+                    IsBlocked = false,
+                    RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+                }
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Admin"), new Claim(ClaimTypes.Name, Guid.NewGuid().ToString()) }, "TestAuth"));
+
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.Valid);
+
+            _userServiceMock.Setup(s => s.SearchInternalUsersAsync("bob", 20))
+                .ReturnsAsync(expectedUsers);
+
+            var actionResult = await _controller.SearchUsers("bob", 20);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<List<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            Assert.Single(apiResponse.Data);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsOk_WhenAuthorizedAsOwner()
+        {
+            var expectedUsers = new List<InternalUserDto>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    Username = "charlie",
+                    Email = "charlie@example.com",
+                    Role = "Owner",
+                    Language = "RU",
+                    IsActive = true,
+                    IsBlocked = false,
+                    RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+                }
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Owner"), new Claim(ClaimTypes.Name, Guid.NewGuid().ToString()) }, "TestAuth"));
+
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.Valid);
+
+            _userServiceMock.Setup(s => s.SearchInternalUsersAsync("char", 20))
+                .ReturnsAsync(expectedUsers);
+
+            var actionResult = await _controller.SearchUsers("char", 20);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<List<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            Assert.Single(apiResponse.Data);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Once);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("\t\n")]
+        public async Task SearchUsers_ReturnsBadRequest_WhenQueryIsNullOrWhitespace(string? query)
+        {
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            var actionResult = await _controller.SearchUsers(query, 20);
+
+            var badReqResult = Assert.IsType<BadRequestObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(badReqResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Search query is required.", apiResponse.Message);
+            _userServiceMock.Verify(s => s.SearchInternalUsersAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsUnauthorized_WhenTokenMissing()
+        {
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.MissingToken);
+
+            var actionResult = await _controller.SearchUsers("test", 20);
+
+            var unauthResult = Assert.IsType<UnauthorizedObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(unauthResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Authorization header is missing or invalid", apiResponse.Message);
+        }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsUnauthorized_WhenTokenInactive()
+        {
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.InactiveToken);
+
+            var actionResult = await _controller.SearchUsers("test", 20);
+
+            var unauthResult = Assert.IsType<UnauthorizedObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(unauthResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("User token is not active.", apiResponse.Message);
+        }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsForbid_WhenCallerLacksAdminPermissions()
+        {
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.NoAdminPermissions);
+
+            var actionResult = await _controller.SearchUsers("test", 20);
+
+            Assert.IsType<ForbidResult>(actionResult);
+        }
+
+        [Fact]
+        public async Task SearchUsers_ReturnsEmptyList_WhenNoUsersMatch()
+        {
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.SearchInternalUsersAsync("nonexistent", 20))
+                .ReturnsAsync(new List<InternalUserDto>());
+
+            var actionResult = await _controller.SearchUsers("nonexistent", 20);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<List<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            Assert.Empty(apiResponse.Data);
+        }
+
+        [Fact]
+        public async Task SearchUsers_Returns500_WhenServiceThrowsException()
+        {
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.SearchInternalUsersAsync("err", 20))
+                .ThrowsAsync(new Exception("Database connection failure"));
+
+            var actionResult = await _controller.SearchUsers("err", 20);
+
+            var statusResult = Assert.IsType<ObjectResult>(actionResult);
+            Assert.Equal(StatusCodes.Status500InternalServerError, statusResult.StatusCode);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(statusResult.Value);
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Internal server error.", apiResponse.Message);
+        }
     }
 }

@@ -182,5 +182,27 @@ namespace MatHelper.BLL.Services
                 RegistrationDate = user.RegistrationDate
             };
         }
+
+        public async Task<List<InternalUserDto>> SearchInternalUsersAsync(string query, int limit = 20)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return new List<InternalUserDto>();
+            }
+
+            var users = await _userRepository.SearchUsersAsync(query, limit);
+
+            return users.Select(u => new InternalUserDto
+            {
+                Id = u.Id,
+                Username = u.Username,
+                Email = u.Email,
+                Role = u.Role,
+                Language = u.Language.ToString(),
+                IsActive = u.IsActive,
+                IsBlocked = u.IsBlocked,
+                RegistrationDate = u.RegistrationDate
+            }).ToList();
+        }
     }
 }
