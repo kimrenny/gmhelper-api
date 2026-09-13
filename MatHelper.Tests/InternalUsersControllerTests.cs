@@ -40,7 +40,7 @@ namespace MatHelper.Tests.Controllers
         }
 
         [Fact]
-        public void Controller_HasAuthorizeAttribute_WithAdminAndOwnerRoles()
+        public void Controller_HasAuthorizeAttribute_WithAdminOwnerAndServiceRoles()
         {
             var authAttribute = typeof(InternalUsersController)
                 .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
@@ -49,10 +49,25 @@ namespace MatHelper.Tests.Controllers
             Assert.NotNull(authAttribute);
             Assert.Contains("Admin", authAttribute.Roles);
             Assert.Contains("Owner", authAttribute.Roles);
+            Assert.Contains("Service", authAttribute.Roles);
+            Assert.DoesNotContain("User", authAttribute.Roles);
         }
 
         [Fact]
-        public async Task GetUserById_ReturnsOk_WithInternalUserDto_WhenAuthorizedAndUserExists()
+        public void AdminController_DoesNotAllowServiceRole_NarrowScopePreserved()
+        {
+            var authAttribute = typeof(AdminController)
+                .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+                .FirstOrDefault() as AuthorizeAttribute;
+
+            Assert.NotNull(authAttribute);
+            Assert.Contains("Admin", authAttribute.Roles);
+            Assert.Contains("Owner", authAttribute.Roles);
+            Assert.DoesNotContain("Service", authAttribute.Roles);
+        }
+
+        [Fact]
+        public async Task GetUserById_ReturnsOk_WithInternalUserDto_WhenAuthorizedAsAdmin()
         {
             var userId = Guid.NewGuid();
             var expectedUser = new InternalUserDto
@@ -66,6 +81,9 @@ namespace MatHelper.Tests.Controllers
                 IsBlocked = false,
                 RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
             };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Admin"), new Claim(ClaimTypes.Name, Guid.NewGuid().ToString()) }, "TestAuth"));
 
             _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
                 .ReturnsAsync(TokenValidationResult.Valid);
@@ -87,15 +105,92 @@ namespace MatHelper.Tests.Controllers
             Assert.Equal("EN", apiResponse.Data.Language);
             Assert.True(apiResponse.Data.IsActive);
             Assert.False(apiResponse.Data.IsBlocked);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Once);
         }
 
         [Fact]
-        public async Task GetUserById_ReturnsNotFound_WhenUserDoesNotExist()
+        public async Task GetUserById_ReturnsOk_WithInternalUserDto_WhenAuthorizedAsOwner()
         {
             var userId = Guid.NewGuid();
+            var expectedUser = new InternalUserDto
+            {
+                Id = userId,
+                Username = "authoritative_user",
+                Email = "authoritative@example.com",
+                Role = "User",
+                Language = "EN",
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Owner"), new Claim(ClaimTypes.Name, Guid.NewGuid().ToString()) }, "TestAuth"));
 
             _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
                 .ReturnsAsync(TokenValidationResult.Valid);
+
+            _userServiceMock.Setup(s => s.GetInternalUserByIdAsync(userId))
+                .ReturnsAsync(expectedUser);
+
+            var actionResult = await _controller.GetUserById(userId.ToString());
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<InternalUserDto>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task GetUserById_ReturnsOk_WhenAuthorizedAsService_WithoutCallingValidateAdminAccess()
+        {
+            var userId = Guid.NewGuid();
+            var expectedUser = new InternalUserDto
+            {
+                Id = userId,
+                Username = "service_resolved_user",
+                Email = "resolved@example.com",
+                Role = "User",
+                Language = "EN",
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+            };
+
+            // Set principal to Service role
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[]
+                {
+                    new Claim(ClaimTypes.Role, "Service"),
+                    new Claim(ClaimTypes.Name, "gmhelper-notify-api")
+                }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.GetInternalUserByIdAsync(userId))
+                .ReturnsAsync(expectedUser);
+
+            var actionResult = await _controller.GetUserById(userId.ToString());
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<InternalUserDto>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            Assert.Equal(userId, apiResponse.Data.Id);
+            Assert.Equal("service_resolved_user", apiResponse.Data.Username);
+
+            // Verify that ValidateAdminAccessAsync (which checks login_tokens DB) was NEVER called for Service identity
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task GetUserById_WithServiceRole_ReturnsNotFound_WhenUserDoesNotExist()
+        {
+            var userId = Guid.NewGuid();
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
 
             _userServiceMock.Setup(s => s.GetInternalUserByIdAsync(userId))
                 .ReturnsAsync((InternalUserDto?)null);
@@ -107,15 +202,16 @@ namespace MatHelper.Tests.Controllers
 
             Assert.False(apiResponse.Success);
             Assert.Equal("User not found.", apiResponse.Message);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Never);
         }
 
         [Fact]
-        public async Task GetUserById_ReturnsNotFound_WhenIdIsInvalidGuid()
+        public async Task GetUserById_WithServiceRole_ReturnsNotFound_WhenIdIsInvalidGuid()
         {
-            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
-                .ReturnsAsync(TokenValidationResult.Valid);
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
 
-            var actionResult = await _controller.GetUserById("not-a-guid");
+            var actionResult = await _controller.GetUserById("invalid-uuid-format");
 
             var notFoundResult = Assert.IsType<NotFoundObjectResult>(actionResult);
             var apiResponse = Assert.IsType<ApiResponse<string>>(notFoundResult.Value);

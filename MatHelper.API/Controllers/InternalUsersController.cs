@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace MatHelper.API.Controllers
 {
-    [Authorize(Roles = "Admin, Owner")]
+    [Authorize(Roles = "Admin, Owner, Service")]
     [ApiController]
     [Route("api/v1/internal/users")]
     public class InternalUsersController : ControllerBase
@@ -39,8 +39,11 @@ namespace MatHelper.API.Controllers
         {
             try
             {
-                var adminValidation = await AdminValidation.ValidateAdminAsync(this, _tokenService);
-                if (adminValidation != null) return adminValidation;
+                if (!User.IsInRole("Service"))
+                {
+                    var adminValidation = await AdminValidation.ValidateAdminAsync(this, _tokenService);
+                    if (adminValidation != null) return adminValidation;
+                }
 
                 if (string.IsNullOrWhiteSpace(id) || !Guid.TryParse(id, out var parsedUserId) || parsedUserId == Guid.Empty)
                 {
