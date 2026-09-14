@@ -490,5 +490,237 @@ namespace MatHelper.Tests.Controllers
             Assert.False(apiResponse.Success);
             Assert.Equal("Internal server error.", apiResponse.Message);
         }
+
+        [Fact]
+        public async Task GetUsers_ReturnsOk_WithPagedResult_WhenAuthorizedAsService_WithoutCallingValidateAdminAccess()
+        {
+            var expectedResult = new PagedResult<InternalUserDto>
+            {
+                Items = new List<InternalUserDto>
+                {
+                    new()
+                    {
+                        Id = Guid.NewGuid(),
+                        Username = "service_user",
+                        Email = "service@example.com",
+                        Role = "User",
+                        Language = "EN",
+                        IsActive = true,
+                        IsBlocked = false,
+                        RegistrationDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc)
+                    }
+                },
+                TotalCount = 1,
+                Page = 1,
+                PageSize = 50
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[]
+                {
+                    new Claim(ClaimTypes.Role, "Service"),
+                    new Claim(ClaimTypes.Name, "gmhelper-notify-api")
+                }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.GetInternalUsersPagedAsync(1, 50, true, true))
+                .ReturnsAsync(expectedResult);
+
+            var actionResult = await _controller.GetUsers(page: 1, pageSize: 50, activeOnly: true, unblockedOnly: true);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<PagedResult<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            Assert.NotNull(apiResponse.Data);
+            Assert.Single(apiResponse.Data.Items);
+            Assert.Equal(1, apiResponse.Data.TotalCount);
+            Assert.Equal(1, apiResponse.Data.Page);
+            Assert.Equal(50, apiResponse.Data.PageSize);
+            Assert.False(apiResponse.Data.HasNextPage);
+            Assert.Equal("service_user", apiResponse.Data.Items[0].Username);
+
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task GetUsers_ReturnsOk_WhenAuthorizedAsAdmin()
+        {
+            var expectedResult = new PagedResult<InternalUserDto>
+            {
+                Items = new List<InternalUserDto>(),
+                TotalCount = 0,
+                Page = 1,
+                PageSize = 50
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Admin"), new Claim(ClaimTypes.Name, Guid.NewGuid().ToString()) }, "TestAuth"));
+
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.Valid);
+
+            _userServiceMock.Setup(s => s.GetInternalUsersPagedAsync(1, 50, true, true))
+                .ReturnsAsync(expectedResult);
+
+            var actionResult = await _controller.GetUsers(1, 50, true, true);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<PagedResult<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task GetUsers_ReturnsOk_WhenAuthorizedAsOwner()
+        {
+            var expectedResult = new PagedResult<InternalUserDto>
+            {
+                Items = new List<InternalUserDto>(),
+                TotalCount = 0,
+                Page = 1,
+                PageSize = 50
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Owner"), new Claim(ClaimTypes.Name, Guid.NewGuid().ToString()) }, "TestAuth"));
+
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.Valid);
+
+            _userServiceMock.Setup(s => s.GetInternalUsersPagedAsync(1, 50, true, true))
+                .ReturnsAsync(expectedResult);
+
+            var actionResult = await _controller.GetUsers(1, 50, true, true);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<PagedResult<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            _tokenServiceMock.Verify(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()), Times.Once);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        [InlineData(-100)]
+        public async Task GetUsers_ReturnsBadRequest_WhenPageLessThanOne(int page)
+        {
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            var actionResult = await _controller.GetUsers(page: page, pageSize: 50);
+
+            var badReqResult = Assert.IsType<BadRequestObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(badReqResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Page must be greater than or equal to 1.", apiResponse.Message);
+            _userServiceMock.Verify(s => s.GetInternalUsersPagedAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        [InlineData(-50)]
+        public async Task GetUsers_ReturnsBadRequest_WhenPageSizeLessThanOne(int pageSize)
+        {
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            var actionResult = await _controller.GetUsers(page: 1, pageSize: pageSize);
+
+            var badReqResult = Assert.IsType<BadRequestObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(badReqResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Page size must be greater than or equal to 1.", apiResponse.Message);
+            _userServiceMock.Verify(s => s.GetInternalUsersPagedAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task GetUsers_ClampsPageSizeTo250_WhenExceedingMax()
+        {
+            var expectedResult = new PagedResult<InternalUserDto>
+            {
+                Items = new List<InternalUserDto>(),
+                TotalCount = 0,
+                Page = 1,
+                PageSize = 250
+            };
+
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.GetInternalUsersPagedAsync(1, 250, true, true))
+                .ReturnsAsync(expectedResult);
+
+            var actionResult = await _controller.GetUsers(page: 1, pageSize: 9999, activeOnly: true, unblockedOnly: true);
+
+            var okResult = Assert.IsType<OkObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<PagedResult<InternalUserDto>>>(okResult.Value);
+
+            Assert.True(apiResponse.Success);
+            _userServiceMock.Verify(s => s.GetInternalUsersPagedAsync(1, 250, true, true), Times.Once);
+        }
+
+        [Fact]
+        public async Task GetUsers_ReturnsUnauthorized_WhenTokenMissing()
+        {
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.MissingToken);
+
+            var actionResult = await _controller.GetUsers(1, 50);
+
+            var unauthResult = Assert.IsType<UnauthorizedObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(unauthResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Authorization header is missing or invalid", apiResponse.Message);
+        }
+
+        [Fact]
+        public async Task GetUsers_ReturnsUnauthorized_WhenTokenInactive()
+        {
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.InactiveToken);
+
+            var actionResult = await _controller.GetUsers(1, 50);
+
+            var unauthResult = Assert.IsType<UnauthorizedObjectResult>(actionResult);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(unauthResult.Value);
+
+            Assert.False(apiResponse.Success);
+            Assert.Equal("User token is not active.", apiResponse.Message);
+        }
+
+        [Fact]
+        public async Task GetUsers_ReturnsForbid_WhenCallerLacksAdminPermissions()
+        {
+            _tokenServiceMock.Setup(t => t.ValidateAdminAccessAsync(It.IsAny<HttpRequest>(), It.IsAny<ClaimsPrincipal>()))
+                .ReturnsAsync(TokenValidationResult.NoAdminPermissions);
+
+            var actionResult = await _controller.GetUsers(1, 50);
+
+            Assert.IsType<ForbidResult>(actionResult);
+        }
+
+        [Fact]
+        public async Task GetUsers_Returns500_WhenServiceThrowsException()
+        {
+            _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+                new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "Service"), new Claim(ClaimTypes.Name, "gmhelper-notify-api") }, "TestAuth"));
+
+            _userServiceMock.Setup(s => s.GetInternalUsersPagedAsync(1, 50, true, true))
+                .ThrowsAsync(new Exception("Database connection failure"));
+
+            var actionResult = await _controller.GetUsers(1, 50, true, true);
+
+            var statusResult = Assert.IsType<ObjectResult>(actionResult);
+            Assert.Equal(StatusCodes.Status500InternalServerError, statusResult.StatusCode);
+            var apiResponse = Assert.IsType<ApiResponse<string>>(statusResult.Value);
+            Assert.False(apiResponse.Success);
+            Assert.Equal("Internal server error.", apiResponse.Message);
+        }
     }
 }

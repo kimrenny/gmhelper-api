@@ -204,5 +204,28 @@ namespace MatHelper.BLL.Services
                 RegistrationDate = u.RegistrationDate
             }).ToList();
         }
+
+        public async Task<PagedResult<InternalUserDto>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
+        {
+            var pagedUsers = await _userRepository.GetInternalUsersPagedAsync(page, pageSize, activeOnly, unblockedOnly);
+
+            return new PagedResult<InternalUserDto>
+            {
+                Items = pagedUsers.Items.Select(u => new InternalUserDto
+                {
+                    Id = u.Id,
+                    Username = u.Username,
+                    Email = u.Email,
+                    Role = u.Role,
+                    Language = u.Language.ToString(),
+                    IsActive = u.IsActive,
+                    IsBlocked = u.IsBlocked,
+                    RegistrationDate = u.RegistrationDate
+                }).ToList(),
+                TotalCount = pagedUsers.TotalCount,
+                Page = pagedUsers.Page,
+                PageSize = pagedUsers.PageSize
+            };
+        }
     }
 }

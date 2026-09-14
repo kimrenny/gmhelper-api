@@ -34,6 +34,8 @@ namespace MatHelper.DAL.Interfaces
 
         Task<List<User>> SearchUsersAsync(string query, int limit = 20);
 
+        Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true);
+
         Task SaveChangesAsync();
     }
 }

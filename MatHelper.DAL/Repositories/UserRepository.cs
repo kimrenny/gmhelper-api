@@ -243,6 +243,40 @@ namespace MatHelper.DAL.Repositories
                 .ToListAsync();
         }
 
+        public async Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
+        {
+            var effectivePage = page < 1 ? 1 : page;
+            var effectivePageSize = pageSize < 1 ? 50 : Math.Min(pageSize, 250);
+
+            var query = _context.Users.AsNoTracking().AsQueryable();
+
+            if (activeOnly)
+            {
+                query = query.Where(u => u.IsActive);
+            }
+
+            if (unblockedOnly)
+            {
+                query = query.Where(u => !u.IsBlocked);
+            }
+
+            int totalCount = await query.CountAsync();
+
+            var users = await query
+                .OrderBy(u => u.Id)
+                .Skip((effectivePage - 1) * effectivePageSize)
+                .Take(effectivePageSize)
+                .ToListAsync();
+
+            return new PagedResult<User>
+            {
+                Items = users,
+                TotalCount = totalCount,
+                Page = effectivePage,
+                PageSize = effectivePageSize
+            };
+        }
+
         private void ValidateEmailOrUsername(string value, string fieldName)
         {
             if (string.IsNullOrWhiteSpace(value))

@@ -389,5 +389,58 @@ namespace MatHelper.Tests.Services
             Assert.Empty(result);
             _userRepoMock.Verify(r => r.SearchUsersAsync(It.IsAny<string>(), It.IsAny<int>()), Times.Never);
         }
+
+        [Fact]
+        public async Task GetInternalUsersPagedAsync_MapsToInternalUserDto_AndExcludesSensitiveFields()
+        {
+            var userId = Guid.NewGuid();
+            var regDate = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+            var users = new List<User>
+            {
+                new()
+                {
+                    Id = userId,
+                    Username = "safe_user",
+                    Email = "safe@example.com",
+                    PasswordHash = "super-secret-password-hash",
+                    Avatar = new byte[] { 1, 2, 3 },
+                    Role = "User",
+                    Language = LanguageType.EN,
+                    IsActive = true,
+                    IsBlocked = false,
+                    RegistrationDate = regDate
+                }
+            };
+
+            var pagedUsers = new PagedResult<User>
+            {
+                Items = users,
+                TotalCount = 1,
+                Page = 1,
+                PageSize = 50
+            };
+
+            _userRepoMock.Setup(r => r.GetInternalUsersPagedAsync(1, 50, true, true))
+                .ReturnsAsync(pagedUsers);
+
+            var result = await _service.GetInternalUsersPagedAsync(1, 50, true, true);
+
+            Assert.NotNull(result);
+            Assert.Single(result.Items);
+            Assert.Equal(1, result.TotalCount);
+            Assert.Equal(1, result.Page);
+            Assert.Equal(50, result.PageSize);
+            Assert.False(result.HasNextPage);
+
+            var item = result.Items[0];
+            Assert.Equal(userId, item.Id);
+            Assert.Equal("safe_user", item.Username);
+            Assert.Equal("safe@example.com", item.Email);
+            Assert.Equal("User", item.Role);
+            Assert.Equal("EN", item.Language);
+            Assert.True(item.IsActive);
+            Assert.False(item.IsBlocked);
+            Assert.Equal(regDate, item.RegistrationDate);
+        }
     }
 }
