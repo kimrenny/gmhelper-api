@@ -14,6 +14,9 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Xunit;
+
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProgram> where TProgram : class
 {
@@ -84,11 +87,15 @@ public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProg
             services.AddScoped<ITokenService, TokenService>();
             services.AddScoped<ITokenGeneratorService, TokenGeneratorService>();
             services.AddScoped<IAdminService, AdminService>();
+            services.AddScoped<IUserAdminService, UserAdminService>();
             services.AddScoped<IUserManagementService, UserManagementService>();
             services.AddScoped<IDeviceManagementService, DeviceManagementService>();
             services.AddScoped<IRequestLogService, RequestLogService>();
             services.AddScoped<IAdminSettingsService, AdminSettingsService>();
+            services.AddScoped<IRecoveryService, RecoveryService>();
             services.AddScoped<IMailService, MockMailService>();
+            services.AddSingleton<MockAutomationEventPublisher>();
+            services.AddSingleton<IAutomationEventPublisher>(sp => sp.GetRequiredService<MockAutomationEventPublisher>());
             services.AddScoped<IGeoTaskProcessingService, GeoTaskProcessingService>();
             services.AddScoped<IMathTaskProcessingService, MathTaskProcessingService>();
             services.AddScoped<IClientInfoService, MockClientInfoService>();

@@ -38,6 +38,7 @@ namespace MatHelper.DAL.Repositories
             try
             {
                 user.PasswordHash = password;
+                user.LastActivityAt = DateTime.UtcNow;
 
                 await _context.SaveChangesAsync();
 
@@ -188,9 +189,9 @@ namespace MatHelper.DAL.Repositories
             await _context.SaveChangesAsync();
         }
 
-        public async Task ActionUserAsync(Guid id, UserAction action)
+        public async Task<(User User, bool StateChanged)> ActionUserAsync(Guid id, UserAction action)
         {
-            if (string.IsNullOrWhiteSpace(id.ToString()))
+            if (id == Guid.Empty)
             {
                 throw new InvalidDataException("Id is null or empty");
             }
@@ -202,9 +203,19 @@ namespace MatHelper.DAL.Repositories
                 throw new InvalidOperationException("User not found.");
             }
 
-            user.IsBlocked = action == UserAction.Ban;
+            bool wasBlocked = user.IsBlocked;
+            bool targetBlocked = action == UserAction.Ban;
+
+            if (wasBlocked == targetBlocked)
+            {
+                return (user, false);
+            }
+
+            user.IsBlocked = targetBlocked;
 
             await _context.SaveChangesAsync();
+
+            return (user, true);
         }
 
         public async Task<List<RegistrationsDto>> GetUserRegistrationsGroupedByDateAsync()
@@ -223,6 +234,58 @@ namespace MatHelper.DAL.Repositories
                 .ToList();
 
             return groupedByDate;
+        }
+
+        public async Task<List<User>> SearchUsersAsync(string query, int limit = 20)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return new List<User>();
+            }
+
+            var trimmed = query.Trim().ToLower();
+            var effectiveLimit = limit <= 0 ? 20 : Math.Min(limit, 50);
+
+            return await _context.Users
+                .Where(u => u.Username.ToLower().Contains(trimmed) || u.Email.ToLower().Contains(trimmed))
+                .OrderBy(u => u.Username)
+                .ThenBy(u => u.Email)
+                .Take(effectiveLimit)
+                .ToListAsync();
+        }
+
+        public async Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
+        {
+            var effectivePage = page < 1 ? 1 : page;
+            var effectivePageSize = pageSize < 1 ? 50 : Math.Min(pageSize, 250);
+
+            var query = _context.Users.AsNoTracking().AsQueryable();
+
+            if (activeOnly)
+            {
+                query = query.Where(u => u.IsActive);
+            }
+
+            if (unblockedOnly)
+            {
+                query = query.Where(u => !u.IsBlocked);
+            }
+
+            int totalCount = await query.CountAsync();
+
+            var users = await query
+                .OrderBy(u => u.Id)
+                .Skip((effectivePage - 1) * effectivePageSize)
+                .Take(effectivePageSize)
+                .ToListAsync();
+
+            return new PagedResult<User>
+            {
+                Items = users,
+                TotalCount = totalCount,
+                Page = effectivePage,
+                PageSize = effectivePageSize
+            };
         }
 
         private void ValidateEmailOrUsername(string value, string fieldName)

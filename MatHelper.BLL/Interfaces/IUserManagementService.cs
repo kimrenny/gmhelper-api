@@ -14,5 +14,7 @@ namespace MatHelper.BLL.Interfaces
         Task UpdateUserAsync(Guid userId, UpdateUserRequest request);
         Task UpdateUserLanguageAsync(Guid userId, LanguageType language);
         Task<InternalUserDto?> GetInternalUserByIdAsync(Guid userId);
+        Task<List<InternalUserDto>> SearchInternalUsersAsync(string query, int limit = 20);
+        Task<PagedResult<InternalUserDto>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true);
     }
 }

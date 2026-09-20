@@ -12,15 +12,22 @@ namespace MatHelper.BLL.Services
         private readonly IUserRepository _userRepository;
         private readonly ITwoFactorService _twoFactorService;
         private readonly ISecurityService _securityService;
+        private readonly IAutomationEventPublisher _automationEventPublisher;
         private readonly ILogger _logger;
 
         private const ushort MinPasswordLength = 8;
 
-        public UserManagementService(IUserRepository userRepository, ITwoFactorService twoFactorService, ISecurityService securityService, ILogger<UserManagementService> logger)
+        public UserManagementService(
+            IUserRepository userRepository,
+            ITwoFactorService twoFactorService,
+            ISecurityService securityService,
+            IAutomationEventPublisher automationEventPublisher,
+            ILogger<UserManagementService> logger)
         {
             _userRepository = userRepository;
             _twoFactorService = twoFactorService;
             _securityService = securityService;
+            _automationEventPublisher = automationEventPublisher;
             _logger = logger;
         }
 
@@ -124,6 +131,7 @@ namespace MatHelper.BLL.Services
                 user.Username = request.Nickname;
             }
 
+            bool passwordChanged = false;
             if (!string.IsNullOrEmpty(request.NewPassword))
             {
                 _logger.LogInformation("Validating new password for UserId: {UserId}", userId);
@@ -136,11 +144,50 @@ namespace MatHelper.BLL.Services
 
                 //_logger.LogInformation("Generating new salt and hashing password for UserId: {UserId}", userId);
                 user.PasswordHash = _securityService.HashPassword(request.NewPassword);
+                passwordChanged = true;
             }
 
             //_logger.LogInformation("Saving changes for UserId: {UserId}", userId);
+            user.LastActivityAt = DateTime.UtcNow;
             await _userRepository.UpdateUserAsync(user);
             //_logger.LogInformation("User {UserId} updated successfully.", userId);
+
+            if (passwordChanged)
+            {
+                var eventId = Guid.NewGuid().ToString();
+                try
+                {
+                    var automationEvent = new AutomationEvent
+                    {
+                        Id = eventId,
+                        Type = "password.changed",
+                        UserId = user.Id.ToString(),
+                        OccurredAt = DateTime.UtcNow,
+                        User = new InternalUserDto
+                        {
+                            Id = user.Id,
+                            Username = user.Username,
+                            Email = user.Email,
+                            Role = user.Role,
+                            Language = user.Language.ToString(),
+                            IsActive = user.IsActive,
+                            IsBlocked = user.IsBlocked,
+                            RegistrationDate = user.RegistrationDate,
+                            LastActivityAt = user.LastActivityAt
+                        },
+                        Data = new Dictionary<string, object>
+                        {
+                            { "source", "password_change_flow" }
+                        }
+                    };
+
+                    await _automationEventPublisher.PublishAsync(automationEvent);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to publish password.changed automation event {EventId} for user {UserId}", eventId, user.Id);
+                }
+            }
         }
 
         public async Task UpdateUserLanguageAsync(Guid userId, LanguageType language)
@@ -152,8 +199,48 @@ namespace MatHelper.BLL.Services
                 throw new InvalidOperationException("User not found");
             }
 
+            if (user.Language == language)
+            {
+                return;
+            }
+
             user.Language = language;
+            user.LastActivityAt = DateTime.UtcNow;
             await _userRepository.UpdateUserAsync(user);
+
+            var eventId = Guid.NewGuid().ToString();
+            try
+            {
+                var automationEvent = new AutomationEvent
+                {
+                    Id = eventId,
+                    Type = "user.language_changed",
+                    UserId = user.Id.ToString(),
+                    OccurredAt = DateTime.UtcNow,
+                    User = new InternalUserDto
+                    {
+                        Id = user.Id,
+                        Username = user.Username,
+                        Email = user.Email,
+                        Role = user.Role,
+                        Language = user.Language.ToString(),
+                        IsActive = user.IsActive,
+                        IsBlocked = user.IsBlocked,
+                        RegistrationDate = user.RegistrationDate,
+                        LastActivityAt = user.LastActivityAt
+                    },
+                    Data = new Dictionary<string, object>
+                    {
+                        { "source", "language_change_flow" }
+                    }
+                };
+
+                await _automationEventPublisher.PublishAsync(automationEvent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to publish user.language_changed automation event {EventId} for user {UserId}", eventId, user.Id);
+            }
         }
 
         public async Task<InternalUserDto?> GetInternalUserByIdAsync(Guid userId)
@@ -179,7 +266,55 @@ namespace MatHelper.BLL.Services
                 Language = user.Language.ToString(),
                 IsActive = user.IsActive,
                 IsBlocked = user.IsBlocked,
-                RegistrationDate = user.RegistrationDate
+                RegistrationDate = user.RegistrationDate,
+                LastActivityAt = user.LastActivityAt
+            };
+        }
+
+        public async Task<List<InternalUserDto>> SearchInternalUsersAsync(string query, int limit = 20)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return new List<InternalUserDto>();
+            }
+
+            var users = await _userRepository.SearchUsersAsync(query, limit);
+
+            return users.Select(u => new InternalUserDto
+            {
+                Id = u.Id,
+                Username = u.Username,
+                Email = u.Email,
+                Role = u.Role,
+                Language = u.Language.ToString(),
+                IsActive = u.IsActive,
+                IsBlocked = u.IsBlocked,
+                RegistrationDate = u.RegistrationDate,
+                LastActivityAt = u.LastActivityAt
+            }).ToList();
+        }
+
+        public async Task<PagedResult<InternalUserDto>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
+        {
+            var pagedUsers = await _userRepository.GetInternalUsersPagedAsync(page, pageSize, activeOnly, unblockedOnly);
+
+            return new PagedResult<InternalUserDto>
+            {
+                Items = pagedUsers.Items.Select(u => new InternalUserDto
+                {
+                    Id = u.Id,
+                    Username = u.Username,
+                    Email = u.Email,
+                    Role = u.Role,
+                    Language = u.Language.ToString(),
+                    IsActive = u.IsActive,
+                    IsBlocked = u.IsBlocked,
+                    RegistrationDate = u.RegistrationDate,
+                    LastActivityAt = u.LastActivityAt
+                }).ToList(),
+                TotalCount = pagedUsers.TotalCount,
+                Page = pagedUsers.Page,
+                PageSize = pagedUsers.PageSize
             };
         }
     }

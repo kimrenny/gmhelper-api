@@ -26,6 +26,7 @@ namespace MatHelper.BLL.Services
         private readonly ITwoFactorAuthService _twoFactorAuthService;
         private readonly ITokenService _tokenService;
         private readonly ICacheService _cache;
+        private readonly IAutomationEventPublisher _automationEventPublisher;
         private readonly ILogger<AuthenticationService> _logger;
 
         private const string RegisterAttemptsKey = "register:attempts";
@@ -34,7 +35,7 @@ namespace MatHelper.BLL.Services
         private const string TokensVersionKey = "tokens:admin:version";
         private const string TokensDashboardCacheKey = "tokens:dashboard";
 
-        public AuthenticationService(IUserRepository userRepository, IAppTwoFactorSessionRepository appTwoFactorSessionRepository, ITwoFactorService twoFactorService, IEmailLoginCodeRepository emailLoginCodeRepository, IAuthLogRepository authLogRepository, IMailService mailService, ISecurityService securityService, ILoginAttemptService loginAttemptService, IRegistrationService registrationService, ISecurityPolicyService securityPolicy, IEmailAuthService emailAuthService, ILoginService loginService, IRecoveryService recoveryService, ITwoFactorAuthService twoFactorAuthService, ITokenService tokenService, ICacheService cache, ILogger<AuthenticationService> logger)
+        public AuthenticationService(IUserRepository userRepository, IAppTwoFactorSessionRepository appTwoFactorSessionRepository, ITwoFactorService twoFactorService, IEmailLoginCodeRepository emailLoginCodeRepository, IAuthLogRepository authLogRepository, IMailService mailService, ISecurityService securityService, ILoginAttemptService loginAttemptService, IRegistrationService registrationService, ISecurityPolicyService securityPolicy, IEmailAuthService emailAuthService, ILoginService loginService, IRecoveryService recoveryService, ITwoFactorAuthService twoFactorAuthService, ITokenService tokenService, ICacheService cache, IAutomationEventPublisher automationEventPublisher, ILogger<AuthenticationService> logger)
         {
             _userRepository = userRepository;
             _twoFactorSessionRepository = appTwoFactorSessionRepository;
@@ -52,6 +53,7 @@ namespace MatHelper.BLL.Services
             _twoFactorAuthService = twoFactorAuthService;
             _tokenService = tokenService;
             _cache = cache;
+            _automationEventPublisher = automationEventPublisher;
             _logger = logger;
         }
 
@@ -166,6 +168,40 @@ namespace MatHelper.BLL.Services
 
             await _mailService.SendConfirmationEmailAsync(user.Email);
 
+            var eventId = Guid.NewGuid().ToString();
+            try
+            {
+                var automationEvent = new AutomationEvent
+                {
+                    Id = eventId,
+                    Type = "user.registered",
+                    UserId = user.Id.ToString(),
+                    OccurredAt = DateTime.UtcNow,
+                    User = new InternalUserDto
+                    {
+                        Id = user.Id,
+                        Username = user.Username,
+                        Email = user.Email,
+                        Role = user.Role,
+                        Language = user.Language.ToString(),
+                        IsActive = user.IsActive,
+                        IsBlocked = user.IsBlocked,
+                        RegistrationDate = user.RegistrationDate,
+                        LastActivityAt = user.LastActivityAt
+                    },
+                    Data = new Dictionary<string, object>
+                    {
+                        { "source", "registration_flow" }
+                    }
+                };
+
+                await _automationEventPublisher.PublishAsync(automationEvent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to publish user.registered automation event {EventId} for user {UserId}", eventId, user.Id);
+            }
+
             return ConfirmTokenResult.Success;
         }
 
@@ -221,6 +257,7 @@ namespace MatHelper.BLL.Services
                 var token = await _loginService.IssueLoginTokenAsync(user, deviceInfo, ipAddress, loginDto.Remember);
 
                 user.LoginTokens!.Add(token);
+                user.LastActivityAt = DateTime.UtcNow;
                 await _userRepository.SaveChangesAsync();
 
                 await _cache.IncrementVersionAsync(TokensVersionKey);
@@ -288,6 +325,7 @@ namespace MatHelper.BLL.Services
             );
 
             user.LoginTokens!.Add(loginToken);
+            user.LastActivityAt = DateTime.UtcNow;
             await _userRepository.SaveChangesAsync();
 
             await _cache.IncrementVersionAsync(TokensVersionKey);
@@ -299,6 +337,40 @@ namespace MatHelper.BLL.Services
                 deviceInfo.UserAgent,
                 "Success via email confirmation"
             );
+
+            var eventId = Guid.NewGuid().ToString();
+            try
+            {
+                var automationEvent = new AutomationEvent
+                {
+                    Id = eventId,
+                    Type = "email.confirmed",
+                    UserId = user.Id.ToString(),
+                    OccurredAt = DateTime.UtcNow,
+                    User = new InternalUserDto
+                    {
+                        Id = user.Id,
+                        Username = user.Username,
+                        Email = user.Email,
+                        Role = user.Role,
+                        Language = user.Language.ToString(),
+                        IsActive = user.IsActive,
+                        IsBlocked = user.IsBlocked,
+                        RegistrationDate = user.RegistrationDate,
+                        LastActivityAt = user.LastActivityAt
+                    },
+                    Data = new Dictionary<string, object>
+                    {
+                        { "source", "email_confirmation_flow" }
+                    }
+                };
+
+                await _automationEventPublisher.PublishAsync(automationEvent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to publish email.confirmed automation event {EventId} for user {UserId}", eventId, user.Id);
+            }
 
             return new LoginResponse
             {
@@ -342,6 +414,7 @@ namespace MatHelper.BLL.Services
 
             user.LoginTokens ??= new List<LoginToken>();
             user.LoginTokens.Add(token);
+            user.LastActivityAt = DateTime.UtcNow;
             
             session.IsUsed = true;
 

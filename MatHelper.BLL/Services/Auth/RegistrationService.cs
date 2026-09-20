@@ -44,6 +44,7 @@ namespace MatHelper.BLL.Services
                 Avatar = null,
                 Role = "User",
                 IsActive = true,
+                LastActivityAt = DateTime.UtcNow,
             };
 
             return Task.FromResult(user);

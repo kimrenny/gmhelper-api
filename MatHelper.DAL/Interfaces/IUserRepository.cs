@@ -1,4 +1,4 @@
-﻿using MatHelper.CORE.Enums;
+using MatHelper.CORE.Enums;
 using MatHelper.CORE.Models;
 using System.Linq.Expressions;
 
@@ -28,9 +28,13 @@ namespace MatHelper.DAL.Interfaces
         IQueryable<LoginToken> GetTokensQuery();
 
         Task UpdateUserAsync(User user);
-        Task ActionUserAsync(Guid id, UserAction action);
+        Task<(User User, bool StateChanged)> ActionUserAsync(Guid id, UserAction action);
 
         Task<List<RegistrationsDto>> GetUserRegistrationsGroupedByDateAsync();
+
+        Task<List<User>> SearchUsersAsync(string query, int limit = 20);
+
+        Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true);
 
         Task SaveChangesAsync();
     }
