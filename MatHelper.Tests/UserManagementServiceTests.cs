@@ -16,6 +16,7 @@ namespace MatHelper.Tests.Services
         private readonly Mock<IUserRepository> _userRepoMock;
         private readonly Mock<ITwoFactorService> _twoFactorMock;
         private readonly Mock<ISecurityService> _securityMock;
+        private readonly Mock<IAutomationEventPublisher> _automationEventPublisherMock;
         private readonly Mock<ILogger<UserManagementService>> _loggerMock;
         private readonly UserManagementService _service;
 
@@ -24,12 +25,14 @@ namespace MatHelper.Tests.Services
             _userRepoMock = new Mock<IUserRepository>();
             _twoFactorMock = new Mock<ITwoFactorService>();
             _securityMock = new Mock<ISecurityService>();
+            _automationEventPublisherMock = new Mock<IAutomationEventPublisher>();
             _loggerMock = new Mock<ILogger<UserManagementService>>();
 
             _service = new UserManagementService(
                 _userRepoMock.Object,
                 _twoFactorMock.Object,
                 _securityMock.Object,
+                _automationEventPublisherMock.Object,
                 _loggerMock.Object
             );
         }
@@ -204,6 +207,161 @@ namespace MatHelper.Tests.Services
             Assert.Equal("new@example.com", user.Email);
             Assert.Equal("NewName", user.Username);
             Assert.Equal("newHash", user.PasswordHash);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.Is<AutomationEvent>(e =>
+                e.Type == "password.changed" &&
+                e.UserId == userId.ToString() &&
+                e.Data != null && (string)e.Data["source"] == "password_change_flow"), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateUserAsync_ShouldNotPublishEvent_WhenPasswordNotChanged()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "OldName",
+                Email = "old@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                RegistrationDate = DateTime.UtcNow,
+                IsBlocked = false,
+            };
+
+            var request = new UpdateUserRequest
+            {
+                CurrentPassword = "currentPass",
+                Email = "updated@example.com",
+                Nickname = "UpdatedName",
+                NewPassword = null // No password update
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.GetUserByEmailAsync(It.IsAny<string>())).ReturnsAsync((User?)null);
+            _userRepoMock.Setup(r => r.GetUserByUsernameAsync(It.IsAny<string>())).ReturnsAsync((User?)null);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).Returns(Task.CompletedTask);
+            _securityMock.Setup(s => s.VerifyPassword(request.CurrentPassword, user.PasswordHash))
+                .Returns(true);
+
+            await _service.UpdateUserAsync(userId, request);
+
+            Assert.Equal("updated@example.com", user.Email);
+            Assert.Equal("UpdatedName", user.Username);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateUserAsync_ShouldNotPublishEvent_WhenPersistenceFails()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "OldName",
+                Email = "old@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                RegistrationDate = DateTime.UtcNow,
+                IsBlocked = false,
+            };
+
+            var request = new UpdateUserRequest
+            {
+                CurrentPassword = "currentPass",
+                NewPassword = "newPassword123"
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _securityMock.Setup(s => s.VerifyPassword(request.CurrentPassword, user.PasswordHash))
+                .Returns(true);
+            _securityMock.Setup(s => s.HashPassword(request.NewPassword)).Returns("newHash");
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).ThrowsAsync(new Exception("DB save failed"));
+
+            await Assert.ThrowsAsync<Exception>(() => _service.UpdateUserAsync(userId, request));
+
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateUserAsync_ShouldSucceedAndLog_WhenPublisherThrowsException()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "OldName",
+                Email = "old@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                RegistrationDate = DateTime.UtcNow,
+                IsBlocked = false,
+            };
+
+            var request = new UpdateUserRequest
+            {
+                CurrentPassword = "currentPass",
+                NewPassword = "newPassword123"
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _securityMock.Setup(s => s.VerifyPassword(request.CurrentPassword, user.PasswordHash))
+                .Returns(true);
+            _securityMock.Setup(s => s.HashPassword(request.NewPassword)).Returns("newHash");
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).Returns(Task.CompletedTask);
+            _automationEventPublisherMock
+                .Setup(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new HttpRequestException("Publisher down"));
+
+            await _service.UpdateUserAsync(userId, request);
+
+            Assert.Equal("newHash", user.PasswordHash);
+            _userRepoMock.Verify(r => r.UpdateUserAsync(user), Times.Once);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateUserAsync_EventPayload_ShouldNotContainSensitiveData()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "OldName",
+                Email = "old@example.com",
+                PasswordHash = "$2a$11$OldHashedPasswordValue",
+                Role = "User",
+                RegistrationDate = DateTime.UtcNow,
+                IsBlocked = false,
+            };
+
+            var request = new UpdateUserRequest
+            {
+                CurrentPassword = "currentPassSecret123!",
+                NewPassword = "newPasswordSecret456!"
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _securityMock.Setup(s => s.VerifyPassword(request.CurrentPassword, user.PasswordHash))
+                .Returns(true);
+            _securityMock.Setup(s => s.HashPassword(request.NewPassword)).Returns("$2a$11$NewHashedPasswordValue");
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).Returns(Task.CompletedTask);
+
+            AutomationEvent? capturedEvent = null;
+            _automationEventPublisherMock
+                .Setup(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()))
+                .Callback<AutomationEvent, CancellationToken>((e, _) => capturedEvent = e)
+                .Returns(Task.CompletedTask);
+
+            await _service.UpdateUserAsync(userId, request);
+
+            Assert.NotNull(capturedEvent);
+            var json = System.Text.Json.JsonSerializer.Serialize(capturedEvent);
+
+            Assert.DoesNotContain("currentPassSecret123!", json);
+            Assert.DoesNotContain("newPasswordSecret456!", json);
+            Assert.DoesNotContain("$2a$11$OldHashedPasswordValue", json);
+            Assert.DoesNotContain("$2a$11$NewHashedPasswordValue", json);
+            Assert.DoesNotContain("PasswordHash", json);
         }
 
         [Fact]
@@ -441,6 +599,320 @@ namespace MatHelper.Tests.Services
             Assert.True(item.IsActive);
             Assert.False(item.IsBlocked);
             Assert.Equal(regDate, item.RegistrationDate);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_ShouldPublishUserLanguageChangedEvent_WhenLanguageChanges()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "polyglot_user",
+                Email = "polyglot@example.com",
+                PasswordHash = "hashed-secret",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = DateTime.UtcNow.AddMonths(-2)
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).Returns(Task.CompletedTask);
+
+            AutomationEvent? capturedEvent = null;
+            _automationEventPublisherMock
+                .Setup(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()))
+                .Callback<AutomationEvent, CancellationToken>((e, _) => capturedEvent = e)
+                .Returns(Task.CompletedTask);
+
+            await _service.UpdateUserLanguageAsync(userId, LanguageType.UA);
+
+            Assert.Equal(LanguageType.UA, user.Language);
+            _userRepoMock.Verify(r => r.UpdateUserAsync(user), Times.Once);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Once);
+
+            Assert.NotNull(capturedEvent);
+            Assert.Equal("user.language_changed", capturedEvent.Type);
+            Assert.Equal(userId.ToString(), capturedEvent.UserId);
+            Assert.False(string.IsNullOrWhiteSpace(capturedEvent.Id));
+            Assert.NotEqual(userId.ToString(), capturedEvent.Id);
+            Assert.Equal(DateTimeKind.Utc, capturedEvent.OccurredAt.Kind);
+
+            Assert.NotNull(capturedEvent.User);
+            Assert.Equal(userId, capturedEvent.User.Id);
+            Assert.Equal("polyglot_user", capturedEvent.User.Username);
+            Assert.Equal("polyglot@example.com", capturedEvent.User.Email);
+            Assert.Equal("UA", capturedEvent.User.Language);
+            Assert.True(capturedEvent.User.IsActive);
+            Assert.False(capturedEvent.User.IsBlocked);
+
+            Assert.NotNull(capturedEvent.Data);
+            Assert.Equal("language_change_flow", capturedEvent.Data["source"]);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_ShouldNotPublishEvent_WhenLanguageUnchanged()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "same_lang_user",
+                Email = "same@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = DateTime.UtcNow
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+
+            await _service.UpdateUserLanguageAsync(userId, LanguageType.EN);
+
+            _userRepoMock.Verify(r => r.UpdateUserAsync(It.IsAny<User>()), Times.Never);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_ShouldNotPublishEvent_WhenUserNotFound()
+        {
+            var userId = Guid.NewGuid();
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync((User?)null);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => _service.UpdateUserLanguageAsync(userId, LanguageType.DE));
+
+            _userRepoMock.Verify(r => r.UpdateUserAsync(It.IsAny<User>()), Times.Never);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_ShouldNotPublishEvent_WhenPersistenceFails()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "user1",
+                Email = "user1@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = DateTime.UtcNow
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).ThrowsAsync(new Exception("DB failure"));
+
+            await Assert.ThrowsAsync<Exception>(() => _service.UpdateUserLanguageAsync(userId, LanguageType.FR));
+
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_ShouldSucceedAndLog_WhenPublisherThrowsException()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "user1",
+                Email = "user1@example.com",
+                PasswordHash = "hash",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = DateTime.UtcNow
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).Returns(Task.CompletedTask);
+            _automationEventPublisherMock
+                .Setup(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new Exception("Publisher offline"));
+
+            // Operation should succeed without throwing
+            await _service.UpdateUserLanguageAsync(userId, LanguageType.JA);
+
+            Assert.Equal(LanguageType.JA, user.Language);
+            _userRepoMock.Verify(r => r.UpdateUserAsync(user), Times.Once);
+            _automationEventPublisherMock.Verify(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_EventPayload_ShouldNotContainSensitiveAuthenticationData()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "user1",
+                Email = "user1@example.com",
+                PasswordHash = "supersecret_hash",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                RegistrationDate = DateTime.UtcNow
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(user)).Returns(Task.CompletedTask);
+
+            AutomationEvent? capturedEvent = null;
+            _automationEventPublisherMock
+                .Setup(x => x.PublishAsync(It.IsAny<AutomationEvent>(), It.IsAny<CancellationToken>()))
+                .Callback<AutomationEvent, CancellationToken>((e, _) => capturedEvent = e)
+                .Returns(Task.CompletedTask);
+
+            await _service.UpdateUserLanguageAsync(userId, LanguageType.ZH);
+
+            Assert.NotNull(capturedEvent);
+
+            var forbiddenSubstrings = new[]
+            {
+                "password", "hash", "salt", "token", "secret", "session", "code", "refresh"
+            };
+
+            var userProperties = typeof(InternalUserDto).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            foreach (var prop in userProperties)
+            {
+                var lowerName = prop.Name.ToLowerInvariant();
+                foreach (var forbidden in forbiddenSubstrings)
+                {
+                    Assert.DoesNotContain(forbidden, lowerName);
+                }
+            }
+
+            if (capturedEvent.Data != null)
+            {
+                foreach (var kvp in capturedEvent.Data)
+                {
+                    var lowerKey = kvp.Key.ToLowerInvariant();
+                    Assert.False(lowerKey.Contains("password") || lowerKey.Contains("token") || lowerKey.Contains("hash"),
+                        $"Data dictionary key '{kvp.Key}' contains sensitive credential name");
+
+                    var strVal = kvp.Value?.ToString() ?? "";
+                    Assert.DoesNotContain("supersecret", strVal.ToLowerInvariant());
+                }
+            }
+        }
+
+        [Fact]
+        public async Task UpdateUserAsync_UpdatesLastActivityAt_InUtc()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "testuser",
+                Email = "test@example.com",
+                RegistrationDate = DateTime.UtcNow.AddMonths(-3),
+                PasswordHash = "oldhash",
+                Role = "User",
+                IsActive = true,
+                IsBlocked = false,
+                LastActivityAt = null
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(It.IsAny<User>())).Returns(Task.CompletedTask);
+            _securityMock.Setup(s => s.VerifyPassword("currentpass", "oldhash")).Returns(true);
+
+            var before = DateTime.UtcNow.AddSeconds(-1);
+            await _service.UpdateUserAsync(userId, new UpdateUserRequest { CurrentPassword = "currentpass", Nickname = "newnick" });
+            var after = DateTime.UtcNow.AddSeconds(1);
+
+            Assert.NotNull(user.LastActivityAt);
+            Assert.True(user.LastActivityAt >= before && user.LastActivityAt <= after);
+            Assert.Equal(DateTimeKind.Utc, user.LastActivityAt.Value.Kind);
+        }
+
+        [Fact]
+        public async Task UpdateUserLanguageAsync_UpdatesLastActivityAt_InUtc()
+        {
+            var userId = Guid.NewGuid();
+            var user = new User
+            {
+                Id = userId,
+                Username = "testuser",
+                Email = "test@example.com",
+                RegistrationDate = DateTime.UtcNow.AddMonths(-3),
+                PasswordHash = "hash",
+                Role = "User",
+                Language = LanguageType.EN,
+                IsActive = true,
+                IsBlocked = false,
+                LastActivityAt = null
+            };
+
+            _userRepoMock.Setup(r => r.GetUserByIdAsync(userId)).ReturnsAsync(user);
+            _userRepoMock.Setup(r => r.UpdateUserAsync(It.IsAny<User>())).Returns(Task.CompletedTask);
+
+            var before = DateTime.UtcNow.AddSeconds(-1);
+            await _service.UpdateUserLanguageAsync(userId, LanguageType.UA);
+            var after = DateTime.UtcNow.AddSeconds(1);
+
+            Assert.NotNull(user.LastActivityAt);
+            Assert.True(user.LastActivityAt >= before && user.LastActivityAt <= after);
+            Assert.Equal(DateTimeKind.Utc, user.LastActivityAt.Value.Kind);
+        }
+
+        [Fact]
+        public async Task GetInternalUserByIdAsync_ReturnsLastActivityAt_WhenSetOrNull()
+        {
+            var userIdWithActivity = Guid.NewGuid();
+            var activityTime = DateTime.UtcNow.AddDays(-10);
+            var userWithActivity = new User
+            {
+                Id = userIdWithActivity,
+                Username = "active_user",
+                Email = "active@example.com",
+                RegistrationDate = DateTime.UtcNow.AddDays(-60),
+                PasswordHash = "hash",
+                Role = "User",
+                IsActive = true,
+                IsBlocked = false,
+                LastActivityAt = activityTime
+            };
+
+            var userIdWithoutActivity = Guid.NewGuid();
+            var userWithoutActivity = new User
+            {
+                Id = userIdWithoutActivity,
+                Username = "inactive_user",
+                Email = "inactive@example.com",
+                RegistrationDate = DateTime.UtcNow.AddDays(-60),
+                PasswordHash = "hash",
+                Role = "User",
+                IsActive = true,
+                IsBlocked = false,
+                LastActivityAt = null
+            };
+
+            _userRepoMock.Setup(r => r.GetUserAsync(It.Is<System.Linq.Expressions.Expression<Func<User, bool>>>(e => true)))
+                .ReturnsAsync((System.Linq.Expressions.Expression<Func<User, bool>> expr) =>
+                {
+                    var func = expr.Compile();
+                    if (func(userWithActivity)) return userWithActivity;
+                    if (func(userWithoutActivity)) return userWithoutActivity;
+                    return null;
+                });
+
+            var resultWith = await _service.GetInternalUserByIdAsync(userIdWithActivity);
+            var resultWithout = await _service.GetInternalUserByIdAsync(userIdWithoutActivity);
+
+            Assert.NotNull(resultWith);
+            Assert.Equal(activityTime, resultWith.LastActivityAt);
+
+            Assert.NotNull(resultWithout);
+            Assert.Null(resultWithout.LastActivityAt);
         }
     }
 }

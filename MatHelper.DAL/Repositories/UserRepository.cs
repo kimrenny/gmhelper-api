@@ -38,6 +38,7 @@ namespace MatHelper.DAL.Repositories
             try
             {
                 user.PasswordHash = password;
+                user.LastActivityAt = DateTime.UtcNow;
 
                 await _context.SaveChangesAsync();
 
@@ -188,9 +189,9 @@ namespace MatHelper.DAL.Repositories
             await _context.SaveChangesAsync();
         }
 
-        public async Task ActionUserAsync(Guid id, UserAction action)
+        public async Task<(User User, bool StateChanged)> ActionUserAsync(Guid id, UserAction action)
         {
-            if (string.IsNullOrWhiteSpace(id.ToString()))
+            if (id == Guid.Empty)
             {
                 throw new InvalidDataException("Id is null or empty");
             }
@@ -202,9 +203,19 @@ namespace MatHelper.DAL.Repositories
                 throw new InvalidOperationException("User not found.");
             }
 
-            user.IsBlocked = action == UserAction.Ban;
+            bool wasBlocked = user.IsBlocked;
+            bool targetBlocked = action == UserAction.Ban;
+
+            if (wasBlocked == targetBlocked)
+            {
+                return (user, false);
+            }
+
+            user.IsBlocked = targetBlocked;
 
             await _context.SaveChangesAsync();
+
+            return (user, true);
         }
 
         public async Task<List<RegistrationsDto>> GetUserRegistrationsGroupedByDateAsync()

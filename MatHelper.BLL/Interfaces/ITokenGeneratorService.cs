@@ -9,5 +9,6 @@ namespace MatHelper.BLL.Interfaces
     {
         string GenerateJwtToken(User user, DeviceInfo deviceInfo);
         string GenerateRefreshToken();
+        string GenerateServiceToken(string serviceName = "gmhelper-api");
     }
-}
+}

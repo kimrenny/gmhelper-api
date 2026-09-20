@@ -15,5 +15,6 @@ namespace MatHelper.CORE.Models
         public bool IsBlocked { get; set; }
         public bool IsActive { get; set; }
         public LanguageType Language { get; set; } = LanguageType.EN;
+        public DateTime? LastActivityAt { get; set; }
     }
 }

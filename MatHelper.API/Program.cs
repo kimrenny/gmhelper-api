@@ -165,10 +165,29 @@ builder.Services.AddScoped<ICacheService, CacheService>();
 
 builder.Services.AddScoped<ErrorLoggingMiddleware>();
 
+builder.Services.Configure<NotifyApiOptions>(options =>
+{
+    builder.Configuration.GetSection("NotifyApi").Bind(options);
+    var envBaseUrl = Environment.GetEnvironmentVariable("NOTIFY_API_BASE_URL");
+    if (!string.IsNullOrWhiteSpace(envBaseUrl))
+    {
+        options.BaseUrl = envBaseUrl;
+    }
+});
+
+builder.Services.AddHttpClient<IAutomationEventPublisher, AutomationEventPublisher>((provider, client) =>
+{
+    var options = provider.GetRequiredService<IOptions<NotifyApiOptions>>().Value;
+    var baseUrl = (string.IsNullOrWhiteSpace(options.BaseUrl) ? "http://localhost:8080" : options.BaseUrl).TrimEnd('/') + "/";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds > 0 ? options.TimeoutSeconds : 10);
+});
+
 builder.Services.AddGrpcClient<SolutionHubService.SolutionHubServiceClient>(options =>
 {
     options.Address = new Uri(Environment.GetEnvironmentVariable("SOLUTION_HUB_URL") ?? "http://solution-hub:50051");
 });
+
 
 builder.Services.AddAuthentication(options =>
 {

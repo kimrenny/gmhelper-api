@@ -28,7 +28,7 @@ namespace MatHelper.DAL.Interfaces
         IQueryable<LoginToken> GetTokensQuery();
 
         Task UpdateUserAsync(User user);
-        Task ActionUserAsync(Guid id, UserAction action);
+        Task<(User User, bool StateChanged)> ActionUserAsync(Guid id, UserAction action);
 
         Task<List<RegistrationsDto>> GetUserRegistrationsGroupedByDateAsync();
 

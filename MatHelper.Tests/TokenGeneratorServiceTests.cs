@@ -1,4 +1,4 @@
-﻿using MatHelper.BLL.Services;
+using MatHelper.BLL.Services;
 using MatHelper.CORE.Models;
 using MatHelper.CORE.Options;
 using Microsoft.Extensions.Logging;
@@ -100,5 +100,24 @@ namespace MatHelper.Tests.Services
             Assert.False(string.IsNullOrWhiteSpace(token2));
             Assert.NotEqual(token1, token2);
         }
+
+        [Fact]
+        public void GenerateServiceToken_ReturnsValidServiceToken()
+        {
+            var tokenString = _service.GenerateServiceToken("gmhelper-api");
+
+            Assert.False(string.IsNullOrWhiteSpace(tokenString));
+
+            var handler = new JwtSecurityTokenHandler();
+            var token = handler.ReadJwtToken(tokenString);
+
+            Assert.Equal("TestIssuer", token.Issuer);
+            Assert.Contains("TestAudience", token.Audiences);
+            Assert.Equal("gmhelper-api", token.Claims.First(c => c.Type == System.Security.Claims.ClaimTypes.Name).Value);
+            Assert.Equal("Service", token.Claims.First(c => c.Type == System.Security.Claims.ClaimTypes.Role).Value);
+            Assert.Equal("gmhelper-api", token.Claims.First(c => c.Type == "sub").Value);
+            Assert.Equal("Service", token.Claims.First(c => c.Type == "role").Value);
+        }
     }
 }
+

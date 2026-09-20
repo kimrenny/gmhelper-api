@@ -10,5 +10,6 @@ namespace MatHelper.CORE.Models
         public bool IsActive { get; set; }
         public bool IsBlocked { get; set; }
         public DateTime RegistrationDate { get; set; }
+        public DateTime? LastActivityAt { get; set; }
     }
 }

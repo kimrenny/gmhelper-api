@@ -12,6 +12,7 @@ namespace MatHelper.BLL.Services
         private readonly IUserRepository _userRepository;
         private readonly IUserMapper _userMapper;
         private readonly ICacheService _cache;
+        private readonly IAutomationEventPublisher _automationEventPublisher;
         private readonly ILogger _logger;
 
         private const string UsersVersionKey = "admin:users:version";
@@ -21,11 +22,13 @@ namespace MatHelper.BLL.Services
             IUserRepository userRepository,
             IUserMapper userMapper,
             ICacheService cache,
+            IAutomationEventPublisher automationEventPublisher,
             ILogger<UserAdminService> logger)
         {
             _userRepository = userRepository;
             _userMapper = userMapper;
             _cache = cache;
+            _automationEventPublisher = automationEventPublisher;
             _logger = logger;
         }
 
@@ -107,16 +110,67 @@ namespace MatHelper.BLL.Services
 
         public async Task ActionUserAsync(Guid userId, string action)
         {
+            if (!Enum.TryParse<UserAction>(action, ignoreCase: true, out var parsedAction))
+            {
+                throw new ArgumentException("Invalid user action.");
+            }
+
             try
             {
-                if (!Enum.TryParse<UserAction>(action, ignoreCase: true, out var parsedAction))
-                {
-                    throw new ArgumentException("Invalid user action.");
-                }
-
-                await _userRepository.ActionUserAsync(userId, parsedAction);
+                var (user, stateChanged) = await _userRepository.ActionUserAsync(userId, parsedAction);
 
                 await _cache.IncrementVersionAsync(UsersVersionKey);
+
+                if (stateChanged)
+                {
+                    var eventType = user.IsBlocked ? "user.blocked" : "user.unblocked";
+                    var eventId = Guid.NewGuid().ToString();
+
+                    try
+                    {
+                        var automationEvent = new AutomationEvent
+                        {
+                            Id = eventId,
+                            Type = eventType,
+                            UserId = user.Id.ToString(),
+                            OccurredAt = DateTime.UtcNow,
+                            User = new InternalUserDto
+                            {
+                                Id = user.Id,
+                                Username = user.Username,
+                                Email = user.Email,
+                                Role = user.Role,
+                                Language = user.Language.ToString(),
+                                IsActive = user.IsActive,
+                                IsBlocked = user.IsBlocked,
+                                RegistrationDate = user.RegistrationDate,
+                                LastActivityAt = user.LastActivityAt
+                            },
+                            Data = new Dictionary<string, object>
+                            {
+                                { "source", "user_admin_action" }
+                            }
+                        };
+
+                        await _automationEventPublisher.PublishAsync(automationEvent);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to publish {EventType} automation event {EventId} for user {UserId}", eventType, eventId, user.Id);
+                    }
+                }
+            }
+            catch (ArgumentException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch (InvalidDataException)
+            {
+                throw;
             }
             catch (Exception ex)
             {

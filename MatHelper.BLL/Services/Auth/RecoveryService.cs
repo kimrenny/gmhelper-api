@@ -17,6 +17,7 @@ namespace MatHelper.BLL.Services
         private readonly IMailService _mailService;
         private readonly ITokenService _tokenService;
         private readonly ISecurityService _securityService;
+        private readonly IAutomationEventPublisher _automationEventPublisher;
         private readonly ILogger<RecoveryService> _logger;
 
         public RecoveryService(
@@ -25,6 +26,7 @@ namespace MatHelper.BLL.Services
             IMailService mailService,
             ITokenService tokenService,
             ISecurityService securityService,
+            IAutomationEventPublisher automationEventPublisher,
             ILogger<RecoveryService> logger)
         {
             _userRepository = userRepository;
@@ -32,6 +34,7 @@ namespace MatHelper.BLL.Services
             _mailService = mailService;
             _tokenService = tokenService;   
             _securityService = securityService;
+            _automationEventPublisher = automationEventPublisher;
             _logger = logger;
         }
 
@@ -88,6 +91,40 @@ namespace MatHelper.BLL.Services
 
             await _passwordRecoveryRepository.InvalidateAllUserRecoveryTokensAsync(user.Id);
             await _tokenService.DeactivateAllUserTokensAsync(user.Id);
+
+            var eventId = Guid.NewGuid().ToString();
+            try
+            {
+                var automationEvent = new AutomationEvent
+                {
+                    Id = eventId,
+                    Type = "password.changed",
+                    UserId = user.Id.ToString(),
+                    OccurredAt = DateTime.UtcNow,
+                    User = new InternalUserDto
+                    {
+                        Id = user.Id,
+                        Username = user.Username,
+                        Email = user.Email,
+                        Role = user.Role,
+                        Language = user.Language.ToString(),
+                        IsActive = user.IsActive,
+                        IsBlocked = user.IsBlocked,
+                        RegistrationDate = user.RegistrationDate,
+                        LastActivityAt = user.LastActivityAt
+                    },
+                    Data = new Dictionary<string, object>
+                    {
+                        { "source", "password_reset_flow" }
+                    }
+                };
+
+                await _automationEventPublisher.PublishAsync(automationEvent);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to publish password.changed automation event {EventId} for user {UserId}", eventId, user.Id);
+            }
 
             return RecoverPasswordResult.Success;
         }

@@ -1,4 +1,4 @@
-﻿using MatHelper.DAL.Database;
+using MatHelper.DAL.Database;
 using Microsoft.EntityFrameworkCore;
 using MatHelper.CORE.Models;
 using MatHelper.DAL.Interfaces;
@@ -41,10 +41,24 @@ namespace MatHelper.DAL.Repositories
 
         public async Task DeactivateAllUserTokensAsync(Guid userId)
         {
-            await _context.LoginTokens
-                .Where(t => t.UserId == userId && t.IsActive)
-                .ExecuteUpdateAsync(setters =>
-                    setters.SetProperty(t => t.IsActive, false));
+            if (_context.Database.IsRelational())
+            {
+                await _context.LoginTokens
+                    .Where(t => t.UserId == userId && t.IsActive)
+                    .ExecuteUpdateAsync(setters =>
+                        setters.SetProperty(t => t.IsActive, false));
+            }
+            else
+            {
+                var tokens = await _context.LoginTokens
+                    .Where(t => t.UserId == userId && t.IsActive)
+                    .ToListAsync();
+
+                foreach (var token in tokens)
+                    token.IsActive = false;
+
+                await _context.SaveChangesAsync();
+            }
         }
 
         public async Task<List<LoginToken>> GetAllLoginTokensAsync()
@@ -150,7 +164,12 @@ namespace MatHelper.DAL.Repositories
                 .Include(t => t.User)
                 .FirstOrDefaultAsync(t => t.Token == authToken && t.IsActive);
 
-            return token?.User?.Id;
+            if (token == null)
+            {
+                return null;
+            }
+
+            return token.UserId != Guid.Empty ? token.UserId : token.User?.Id;
         }
 
         public async Task SaveChangesAsync()
