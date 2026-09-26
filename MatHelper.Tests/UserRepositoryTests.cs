@@ -408,5 +408,37 @@ namespace MatHelper.Tests
             Assert.Equal(id3, page2.Items[0].Id);
             Assert.False(page2.HasNextPage);
         }
+
+        [Fact]
+        public async Task GetInternalUsersPagedAsync_AppliesAllAudienceFiltersCorrectly()
+        {
+            using var context = CreateDbContext();
+            var now = DateTime.UtcNow;
+
+            var u1 = new User { Id = Guid.NewGuid(), Username = "adm_en_new", Email = "1@t.com", PasswordHash = "h", Role = "Admin", Language = LanguageType.EN, IsActive = true, IsBlocked = false, RegistrationDate = now.AddDays(-1) };
+            var u2 = new User { Id = Guid.NewGuid(), Username = "usr_en_new", Email = "2@t.com", PasswordHash = "h", Role = "User", Language = LanguageType.EN, IsActive = true, IsBlocked = false, RegistrationDate = now.AddDays(-1) };
+            var u3 = new User { Id = Guid.NewGuid(), Username = "adm_de_new", Email = "3@t.com", PasswordHash = "h", Role = "Admin", Language = LanguageType.DE, IsActive = true, IsBlocked = false, RegistrationDate = now.AddDays(-1) };
+            var u4 = new User { Id = Guid.NewGuid(), Username = "adm_en_old", Email = "4@t.com", PasswordHash = "h", Role = "Admin", Language = LanguageType.EN, IsActive = true, IsBlocked = false, RegistrationDate = now.AddDays(-60) };
+
+            context.Users.AddRange(u1, u2, u3, u4);
+            await context.SaveChangesAsync();
+
+            var repository = new UserRepository(context);
+
+            // Filter: Role=Admin AND Language=EN AND RegistrationDate=last_7_days
+            var results = await repository.GetInternalUsersPagedAsync(
+                page: 1,
+                pageSize: 50,
+                activeOnly: true,
+                unblockedOnly: true,
+                role: "Admin",
+                language: "EN",
+                registrationDate: "last_7_days",
+                emailConfirmed: "confirmed",
+                accountStatus: "active");
+
+            Assert.Single(results.Items);
+            Assert.Equal(u1.Id, results.Items[0].Id);
+        }
     }
 }

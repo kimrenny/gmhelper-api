@@ -353,5 +353,49 @@ namespace MatHelper.Tests.Services
                 UserId = ""
             }));
         }
+
+        [Theory]
+        [InlineData("user.blocked")]
+        [InlineData("user.unblocked")]
+        [InlineData("user.language_changed")]
+        public async Task PublishAsync_SupportedLifecycleEvents_PublishesSuccessfully(string eventType)
+        {
+            HttpRequestMessage? capturedRequest = null;
+            string? capturedBody = null;
+
+            var (publisher, _) = CreatePublisherWithHandler(req =>
+            {
+                capturedRequest = req;
+                capturedBody = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"eventId\":\"evt-lc\",\"eventType\":\"" + eventType + "\",\"results\":[]}")
+                };
+            });
+
+            var now = DateTime.UtcNow;
+            var evt = new AutomationEvent
+            {
+                Id = "evt-" + eventType,
+                Type = eventType,
+                UserId = "usr-lifecycle-123",
+                OccurredAt = now,
+                Data = new Dictionary<string, object>
+                {
+                    { "source", "lifecycle_test" }
+                }
+            };
+
+            await publisher.PublishAsync(evt);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal(HttpMethod.Post, capturedRequest.Method);
+            Assert.Equal("/api/v1/internal/automation/events", capturedRequest.RequestUri?.AbsolutePath);
+            Assert.NotNull(capturedBody);
+            using var doc = JsonDocument.Parse(capturedBody);
+            Assert.Equal("evt-" + eventType, doc.RootElement.GetProperty("id").GetString());
+            Assert.Equal(eventType, doc.RootElement.GetProperty("type").GetString());
+            Assert.Equal("usr-lifecycle-123", doc.RootElement.GetProperty("userId").GetString());
+        }
     }
 }

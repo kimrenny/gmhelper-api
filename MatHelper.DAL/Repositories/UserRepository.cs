@@ -254,7 +254,21 @@ namespace MatHelper.DAL.Repositories
                 .ToListAsync();
         }
 
-        public async Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
+        public Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
+        {
+            return GetInternalUsersPagedAsync(page, pageSize, activeOnly, unblockedOnly, null, null, null, null, null);
+        }
+
+        public async Task<PagedResult<User>> GetInternalUsersPagedAsync(
+            int page,
+            int pageSize,
+            bool activeOnly,
+            bool unblockedOnly,
+            string? role,
+            string? language,
+            string? registrationDate,
+            string? emailConfirmed,
+            string? accountStatus)
         {
             var effectivePage = page < 1 ? 1 : page;
             var effectivePageSize = pageSize < 1 ? 50 : Math.Min(pageSize, 250);
@@ -269,6 +283,85 @@ namespace MatHelper.DAL.Repositories
             if (unblockedOnly)
             {
                 query = query.Where(u => !u.IsBlocked);
+            }
+
+            if (!string.IsNullOrWhiteSpace(role))
+            {
+                var trimmedRole = role.Trim();
+                if (!trimmedRole.Equals("all", StringComparison.OrdinalIgnoreCase) &&
+                    !trimmedRole.Equals("all roles", StringComparison.OrdinalIgnoreCase))
+                {
+                    query = query.Where(u => u.Role.ToLower() == trimmedRole.ToLower());
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(language))
+            {
+                var trimmedLang = language.Trim();
+                if (!trimmedLang.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (Enum.TryParse<LanguageType>(trimmedLang, true, out var langEnum))
+                    {
+                        query = query.Where(u => u.Language == langEnum);
+                    }
+                    else
+                    {
+                        query = query.Where(u => false);
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(registrationDate))
+            {
+                var trimmedReg = registrationDate.Trim().ToLowerInvariant();
+                if (!trimmedReg.Equals("any", StringComparison.OrdinalIgnoreCase) &&
+                    !trimmedReg.Equals("any date", StringComparison.OrdinalIgnoreCase))
+                {
+                    var now = DateTime.UtcNow;
+                    if (trimmedReg == "today")
+                    {
+                        var startOfToday = now.Date;
+                        query = query.Where(u => u.RegistrationDate >= startOfToday);
+                    }
+                    else if (trimmedReg == "last_7_days" || trimmedReg == "7d" || trimmedReg == "7 days" || trimmedReg == "last 7 days")
+                    {
+                        var cutoff = now.AddDays(-7);
+                        query = query.Where(u => u.RegistrationDate >= cutoff);
+                    }
+                    else if (trimmedReg == "last_30_days" || trimmedReg == "30d" || trimmedReg == "30 days" || trimmedReg == "last 30 days")
+                    {
+                        var cutoff = now.AddDays(-30);
+                        query = query.Where(u => u.RegistrationDate >= cutoff);
+                    }
+                    else if (trimmedReg == "last_90_days" || trimmedReg == "90d" || trimmedReg == "90 days" || trimmedReg == "last 90 days")
+                    {
+                        var cutoff = now.AddDays(-90);
+                        query = query.Where(u => u.RegistrationDate >= cutoff);
+                    }
+                    else if (trimmedReg == "older_30d" || trimmedReg == "older_30_days" || trimmedReg == ">30d" || trimmedReg == "older than 30 days")
+                    {
+                        var cutoff = now.AddDays(-30);
+                        query = query.Where(u => u.RegistrationDate < cutoff);
+                    }
+                    else if (trimmedReg == "older_90d" || trimmedReg == "older_90_days" || trimmedReg == ">90d" || trimmedReg == "older than 90 days")
+                    {
+                        var cutoff = now.AddDays(-90);
+                        query = query.Where(u => u.RegistrationDate < cutoff);
+                    }
+                    else if (DateTime.TryParse(registrationDate, null, System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsedDate))
+                    {
+                        query = query.Where(u => u.RegistrationDate >= parsedDate);
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(emailConfirmed))
+            {
+                var trimmedEmailConf = emailConfirmed.Trim().ToLowerInvariant();
+                if (trimmedEmailConf == "unconfirmed" || trimmedEmailConf == "false" || trimmedEmailConf == "no" || trimmedEmailConf == "0")
+                {
+                    query = query.Where(u => false);
+                }
             }
 
             int totalCount = await query.CountAsync();

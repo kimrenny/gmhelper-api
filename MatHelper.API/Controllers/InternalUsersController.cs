@@ -42,7 +42,12 @@ namespace MatHelper.API.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 50,
             [FromQuery] bool activeOnly = true,
-            [FromQuery] bool unblockedOnly = true)
+            [FromQuery] bool unblockedOnly = true,
+            [FromQuery] string? role = null,
+            [FromQuery] string? language = null,
+            [FromQuery] string? registrationDate = null,
+            [FromQuery] string? emailConfirmed = null,
+            [FromQuery] string? accountStatus = null)
         {
             try
             {
@@ -64,7 +69,29 @@ namespace MatHelper.API.Controllers
 
                 var effectivePageSize = Math.Min(pageSize, 250);
 
-                var result = await _userManagementService.GetInternalUsersPagedAsync(page, effectivePageSize, activeOnly, unblockedOnly);
+                bool hasAudienceFilter = !string.IsNullOrWhiteSpace(role) ||
+                                         !string.IsNullOrWhiteSpace(language) ||
+                                         !string.IsNullOrWhiteSpace(registrationDate) ||
+                                         !string.IsNullOrWhiteSpace(emailConfirmed) ||
+                                         !string.IsNullOrWhiteSpace(accountStatus);
+
+                var result = hasAudienceFilter
+                    ? await _userManagementService.GetInternalUsersPagedAsync(
+                        page,
+                        effectivePageSize,
+                        activeOnly,
+                        unblockedOnly,
+                        role,
+                        language,
+                        registrationDate,
+                        emailConfirmed,
+                        accountStatus)
+                    : await _userManagementService.GetInternalUsersPagedAsync(
+                        page,
+                        effectivePageSize,
+                        activeOnly,
+                        unblockedOnly);
+
                 return Ok(ApiResponse<PagedResult<InternalUserDto>>.Ok(result));
             }
             catch (Exception ex)

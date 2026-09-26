@@ -297,6 +297,81 @@ namespace MatHelper.BLL.Services
         public async Task<PagedResult<InternalUserDto>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true)
         {
             var pagedUsers = await _userRepository.GetInternalUsersPagedAsync(page, pageSize, activeOnly, unblockedOnly);
+            if (pagedUsers?.Items == null)
+            {
+                return new PagedResult<InternalUserDto>
+                {
+                    Items = new List<InternalUserDto>(),
+                    TotalCount = 0,
+                    Page = page,
+                    PageSize = pageSize
+                };
+            }
+
+            return new PagedResult<InternalUserDto>
+            {
+                Items = pagedUsers.Items.Select(u => new InternalUserDto
+                {
+                    Id = u.Id,
+                    Username = u.Username,
+                    Email = u.Email,
+                    Role = u.Role,
+                    Language = u.Language.ToString(),
+                    IsActive = u.IsActive,
+                    IsBlocked = u.IsBlocked,
+                    RegistrationDate = u.RegistrationDate,
+                    LastActivityAt = u.LastActivityAt
+                }).ToList(),
+                TotalCount = pagedUsers.TotalCount,
+                Page = pagedUsers.Page,
+                PageSize = pagedUsers.PageSize
+            };
+        }
+
+        public async Task<PagedResult<InternalUserDto>> GetInternalUsersPagedAsync(
+            int page,
+            int pageSize,
+            bool activeOnly,
+            bool unblockedOnly,
+            string? role,
+            string? language,
+            string? registrationDate,
+            string? emailConfirmed,
+            string? accountStatus)
+        {
+            bool hasFilter = !string.IsNullOrWhiteSpace(role) ||
+                             !string.IsNullOrWhiteSpace(language) ||
+                             !string.IsNullOrWhiteSpace(registrationDate) ||
+                             !string.IsNullOrWhiteSpace(emailConfirmed) ||
+                             !string.IsNullOrWhiteSpace(accountStatus);
+
+            var pagedUsers = hasFilter
+                ? await _userRepository.GetInternalUsersPagedAsync(
+                    page,
+                    pageSize,
+                    activeOnly,
+                    unblockedOnly,
+                    role,
+                    language,
+                    registrationDate,
+                    emailConfirmed,
+                    accountStatus)
+                : await _userRepository.GetInternalUsersPagedAsync(
+                    page,
+                    pageSize,
+                    activeOnly,
+                    unblockedOnly);
+
+            if (pagedUsers?.Items == null)
+            {
+                return new PagedResult<InternalUserDto>
+                {
+                    Items = new List<InternalUserDto>(),
+                    TotalCount = 0,
+                    Page = page,
+                    PageSize = pageSize
+                };
+            }
 
             return new PagedResult<InternalUserDto>
             {
