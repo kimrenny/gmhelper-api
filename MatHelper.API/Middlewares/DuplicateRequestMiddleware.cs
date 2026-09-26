@@ -1,7 +1,7 @@
-﻿using MatHelper.BLL.Interfaces;
+using MatHelper.BLL.Interfaces;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using System.Collections.Concurrent;
+using Microsoft.Extensions.Caching.Memory;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -10,14 +10,16 @@ namespace MatHelper.BLL.Middlewares
     public class DuplicateRequestMiddleware
     {
         private readonly RequestDelegate _next;
-        private static readonly ConcurrentDictionary<string, DateTime> _recentRequests = new();
+        private readonly IMemoryCache _cache;
+        private readonly object[] _lockStripes = Enumerable.Range(0, 128).Select(_ => new object()).ToArray();
 
         private readonly TimeSpan _duplicateThreshold = TimeSpan.FromMilliseconds(500); // change to longer time if necessary
         private readonly TimeSpan _logsThreshold = TimeSpan.FromMilliseconds(100);
 
-        public DuplicateRequestMiddleware(RequestDelegate next)
+        public DuplicateRequestMiddleware(RequestDelegate next, IMemoryCache? memoryCache = null)
         {
             _next = next;
+            _cache = memoryCache ?? new MemoryCache(new MemoryCacheOptions());
         }
 
         public async Task InvokeAsync(HttpContext context, IClientInfoService clientInfoService)
@@ -30,7 +32,7 @@ namespace MatHelper.BLL.Middlewares
             var deviceKey = $"{deviceInfo.UserAgent}-{deviceInfo.Platform}";
 
             string bodyHash = string.Empty;
-            if(context.Request.ContentLength > 0 && context.Request.Body.CanSeek)
+            if (context.Request.ContentLength > 0 && context.Request.Body.CanSeek)
             {
                 using var reader = new StreamReader(context.Request.Body, Encoding.UTF8, leaveOpen: true);
                 var body = await reader.ReadToEndAsync();
@@ -43,17 +45,27 @@ namespace MatHelper.BLL.Middlewares
 
             var requestKey = $"{ip}-{deviceKey}-{context.Request.Method}-{context.Request.Path}-{bodyHash}";
 
-            if(_recentRequests.TryGetValue(requestKey, out var lastRequestTime))
+            var lockObj = _lockStripes[(uint)requestKey.GetHashCode() % (uint)_lockStripes.Length];
+            bool isDuplicate;
+            lock (lockObj)
             {
-                if(DateTime.UtcNow - lastRequestTime < threshold)
+                if (_cache.TryGetValue(requestKey, out _))
                 {
-                    context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-                    await context.Response.WriteAsync("Duplicate request detected. Please wait before retrying.");
-                    return;
+                    isDuplicate = true;
+                }
+                else
+                {
+                    _cache.Set(requestKey, true, threshold);
+                    isDuplicate = false;
                 }
             }
 
-            _recentRequests[requestKey] = DateTime.UtcNow;
+            if (isDuplicate)
+            {
+                context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                await context.Response.WriteAsync("Duplicate request detected. Please wait before retrying.");
+                return;
+            }
 
             await _next(context);
         }

@@ -32,6 +32,7 @@ builder.Configuration.AddJsonFile(
     reloadOnChange: false);
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<RequestLoggingFilter>();
