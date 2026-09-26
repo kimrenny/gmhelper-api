@@ -36,6 +36,17 @@ namespace MatHelper.DAL.Interfaces
 
         Task<PagedResult<User>> GetInternalUsersPagedAsync(int page = 1, int pageSize = 50, bool activeOnly = true, bool unblockedOnly = true);
 
+        Task<PagedResult<User>> GetInternalUsersPagedAsync(
+            int page,
+            int pageSize,
+            bool activeOnly,
+            bool unblockedOnly,
+            string? role,
+            string? language,
+            string? registrationDate,
+            string? emailConfirmed,
+            string? accountStatus);
+
         Task SaveChangesAsync();
     }
 }

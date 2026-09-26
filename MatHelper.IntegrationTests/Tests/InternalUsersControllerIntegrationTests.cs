@@ -330,5 +330,105 @@ namespace MatHelper.IntegrationTests.Tests
                 Assert.Equal(LanguageType.KO, userInDb.Language);
             }
         }
+
+        [Fact]
+        public async Task GetUsers_AudienceFilters_RoleAndLanguageAndRegistrationDate_MatchesCorrectUsers()
+        {
+            var user1Id = Guid.NewGuid();
+            var user2Id = Guid.NewGuid();
+            var user3Id = Guid.NewGuid();
+
+            using (var scope = _factory.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                db.Users.AddRange(
+                    new User
+                    {
+                        Id = user1Id,
+                        Username = "aud_admin_en",
+                        Email = "admin_en@aud.org",
+                        PasswordHash = "hash1",
+                        Role = "Admin",
+                        Language = LanguageType.EN,
+                        IsActive = true,
+                        IsBlocked = false,
+                        RegistrationDate = DateTime.UtcNow.AddDays(-2),
+                    },
+                    new User
+                    {
+                        Id = user2Id,
+                        Username = "aud_user_en",
+                        Email = "user_en@aud.org",
+                        PasswordHash = "hash2",
+                        Role = "User",
+                        Language = LanguageType.EN,
+                        IsActive = true,
+                        IsBlocked = false,
+                        RegistrationDate = DateTime.UtcNow.AddDays(-2),
+                    },
+                    new User
+                    {
+                        Id = user3Id,
+                        Username = "aud_admin_ru",
+                        Email = "admin_ru@aud.org",
+                        PasswordHash = "hash3",
+                        Role = "Admin",
+                        Language = LanguageType.RU,
+                        IsActive = true,
+                        IsBlocked = false,
+                        RegistrationDate = DateTime.UtcNow.AddDays(-40),
+                    }
+                );
+                await db.SaveChangesAsync();
+            }
+
+            var serviceToken = GenerateServiceToken("gmhelper-notify-api");
+
+            // Filter 1: Role=Admin & Language=EN
+            var request1 = new HttpRequestMessage(HttpMethod.Get, "api/v1/internal/users?role=Admin&language=EN");
+            request1.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceToken);
+            var response1 = await _client.SendAsync(request1);
+            Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
+            var res1 = await response1.Content.ReadFromJsonAsync<ApiResponse<PagedResult<InternalUserDto>>>();
+            Assert.NotNull(res1?.Data);
+            Assert.Contains(res1.Data.Items, u => u.Id == user1Id);
+            Assert.DoesNotContain(res1.Data.Items, u => u.Id == user2Id);
+            Assert.DoesNotContain(res1.Data.Items, u => u.Id == user3Id);
+
+            // Filter 2: registrationDate=last_7_days
+            await Task.Delay(550);
+            var request2 = new HttpRequestMessage(HttpMethod.Get, "api/v1/internal/users?registrationDate=last_7_days");
+            request2.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceToken);
+            var response2 = await _client.SendAsync(request2);
+            var raw2 = await response2.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
+            var res2 = JsonSerializer.Deserialize<ApiResponse<PagedResult<InternalUserDto>>>(raw2, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.NotNull(res2?.Data);
+            Assert.Contains(res2.Data.Items, u => u.Id == user1Id);
+            Assert.Contains(res2.Data.Items, u => u.Id == user2Id);
+            Assert.DoesNotContain(res2.Data.Items, u => u.Id == user3Id); // > 7 days ago
+
+            // Filter 3: registrationDate=older_30d
+            await Task.Delay(550);
+            var request3 = new HttpRequestMessage(HttpMethod.Get, "api/v1/internal/users?registrationDate=older_30d");
+            request3.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceToken);
+            var response3 = await _client.SendAsync(request3);
+            Assert.Equal(HttpStatusCode.OK, response3.StatusCode);
+            var res3 = await response3.Content.ReadFromJsonAsync<ApiResponse<PagedResult<InternalUserDto>>>();
+            Assert.NotNull(res3?.Data);
+            Assert.DoesNotContain(res3.Data.Items, u => u.Id == user1Id);
+            Assert.DoesNotContain(res3.Data.Items, u => u.Id == user2Id);
+            Assert.Contains(res3.Data.Items, u => u.Id == user3Id);
+
+            // Filter 4: emailConfirmed=unconfirmed -> matches 0
+            await Task.Delay(550);
+            var request4 = new HttpRequestMessage(HttpMethod.Get, "api/v1/internal/users?emailConfirmed=unconfirmed");
+            request4.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceToken);
+            var response4 = await _client.SendAsync(request4);
+            Assert.Equal(HttpStatusCode.OK, response4.StatusCode);
+            var res4 = await response4.Content.ReadFromJsonAsync<ApiResponse<PagedResult<InternalUserDto>>>();
+            Assert.NotNull(res4?.Data);
+            Assert.Empty(res4.Data.Items);
+        }
     }
 }
