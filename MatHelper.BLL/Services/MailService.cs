@@ -1,284 +1,157 @@
-using System.Net.Mail;
-using Microsoft.Extensions.Configuration;
 using MatHelper.BLL.Interfaces;
-using System.Net;
-using Microsoft.Extensions.Logging;
-using MatHelper.CORE.Enums;
+using MatHelper.CORE.Models;
 using MatHelper.DAL.Interfaces;
-using MatHelper.BLL.MailTemplates;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace MatHelper.BLL.Services
 {
     public class MailService : IMailService
     {
+        private readonly INotifyApiClient _notifyApiClient;
         private readonly IUserRepository _userRepository;
         private readonly IUserManagementService _userManagementService;
         private readonly IConfiguration _configuration;
-        private readonly ILogger _logger;
+        private readonly ILogger<MailService> _logger;
 
-        public MailService(IUserRepository userRepository, IUserManagementService userManagementService, IConfiguration configuration, ILogger<MailService> logger)
+        public MailService(
+            INotifyApiClient notifyApiClient,
+            IUserRepository userRepository,
+            IUserManagementService userManagementService,
+            IConfiguration configuration,
+            ILogger<MailService> logger)
         {
-            _userRepository = userRepository;
-            _userManagementService = userManagementService;
-            _configuration = configuration;
-            _logger = logger;
+            _notifyApiClient = notifyApiClient ?? throw new ArgumentNullException(nameof(notifyApiClient));
+            _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
+            _userManagementService = userManagementService ?? throw new ArgumentNullException(nameof(userManagementService));
+            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
         public async Task SendRegistrationCodeEmailAsync(string toEmail, string code)
         {
-            var smtpHost = Environment.GetEnvironmentVariable("SMTP__Host");
-            var smtpPortString = Environment.GetEnvironmentVariable("SMTP_Port");
-            var smtpUsername = Environment.GetEnvironmentVariable("SMTP__Username");
-            var smtpPassword = Environment.GetEnvironmentVariable("SMTP__Password");
-            var smtpFrom = Environment.GetEnvironmentVariable("SMTP__From");
-
-            if (string.IsNullOrWhiteSpace(smtpHost) || string.IsNullOrWhiteSpace(smtpUsername) || string.IsNullOrWhiteSpace(smtpPassword) || string.IsNullOrWhiteSpace(smtpFrom))
+            var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
+            if (string.IsNullOrWhiteSpace(clientBaseUrl))
             {
-                throw new InvalidOperationException("SMTP configuration is missing in the environment variables.");
+                throw new InvalidOperationException("Client application base URL is not configured.");
             }
 
-            if (!int.TryParse(smtpPortString, out var smtpPort))
+            var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
+
+            _logger.LogInformation("Dispatching registration code email request for {RecipientEmail} to notify-api", toEmail);
+
+            var request = new SendNotificationRequest
             {
-                throw new InvalidOperationException("Invalid SMTP port value.");
-            }
-
-            _logger.LogInformation($"Attempting to send IP confirmation code email to {toEmail} using SMTP server {smtpHost} on port {smtpPort}.");
-
-            try
-            {
-                var fromAddress = new MailAddress(smtpFrom, "GMHelper");
-                var toAddress = new MailAddress(toEmail);
-
-                var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
-                if (string.IsNullOrWhiteSpace(clientBaseUrl))
+                TemplateKey = "auth.register_code",
+                Locale = "en",
+                RecipientEmail = toEmail,
+                Variables = new Dictionary<string, object>
                 {
-                    throw new InvalidOperationException("Client application base URL is not configured.");
+                    { "mainLink", mainLink },
+                    { "code", code }
                 }
+            };
 
-                var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
-
-                var template = RegisterCodeMailProvider.Get("en", mainLink, code);
-
-                using (var smtpClient = new SmtpClient(smtpHost, smtpPort))
-                {
-                    smtpClient.Credentials = new NetworkCredential(smtpUsername, smtpPassword);
-                    smtpClient.EnableSsl = true;
-
-                    var mailMessage = new MailMessage(fromAddress, toAddress)
-                    {
-                        Subject = template.Subject,
-                        Body = template.Body,
-                        IsBodyHtml = true
-                    };
-
-                    await smtpClient.SendMailAsync(mailMessage);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Failed to send registration code email to {toEmail}.");
-                throw;
-            }
+            await _notifyApiClient.SendNotificationAsync(request);
         }
 
         public async Task SendConfirmationEmailAsync(string toEmail)
         {
-            var smtpHost = Environment.GetEnvironmentVariable("SMTP__Host");
-            var smtpPortString = Environment.GetEnvironmentVariable("SMTP_Port");
-            var smtpUsername = Environment.GetEnvironmentVariable("SMTP__Username");
-            var smtpPassword = Environment.GetEnvironmentVariable("SMTP__Password");
-            var smtpFrom = Environment.GetEnvironmentVariable("SMTP__From");
-
-            if (string.IsNullOrWhiteSpace(smtpHost) || string.IsNullOrWhiteSpace(smtpUsername) || string.IsNullOrWhiteSpace(smtpPassword) || string.IsNullOrWhiteSpace(smtpFrom))
+            var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
+            if (string.IsNullOrWhiteSpace(clientBaseUrl))
             {
-                throw new InvalidOperationException("SMTP configuration is missing in the environment variables.");
+                throw new InvalidOperationException("Client application base URL is not configured.");
             }
 
-            if (!int.TryParse(smtpPortString, out var smtpPort))
+            var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
+
+            _logger.LogInformation("Dispatching registration welcome email request for {RecipientEmail} to notify-api", toEmail);
+
+            var user = await _userRepository.GetUserByEmailAsync(toEmail);
+            var language = await _userManagementService.GetUserLanguageByEmail(toEmail);
+            var locale = NormalizeLocale(language);
+
+            var request = new SendNotificationRequest
             {
-                throw new InvalidOperationException("Invalid SMTP port value.");
-            }
-
-            _logger.LogInformation($"Attempting to send registration success email to {toEmail} using SMTP server {smtpHost} on port {smtpPort}.");
-
-            try
-            {
-                var fromAddress = new MailAddress(smtpFrom, "GMHelper");
-                var toAddress = new MailAddress(toEmail);
-                var subject = "Welcome to GMHelper";
-
-                var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
-                if (string.IsNullOrWhiteSpace(clientBaseUrl))
+                TemplateKey = "auth.welcome",
+                Locale = locale,
+                ExternalUserId = user?.Id.ToString(),
+                RecipientEmail = toEmail,
+                RecipientName = user?.Username,
+                Variables = new Dictionary<string, object>
                 {
-                    throw new InvalidOperationException("Client application base URL is not configured.");
+                    { "mainLink", mainLink }
                 }
+            };
 
-                var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
-
-                var body = $@"
-                <div style='background-color:#000; color:#fff; font-family:Arial, sans-serif; max-width:600px; margin:auto; padding:20px; border-radius:10px;'>
-                    <h2 style='text-align:center;'>
-                        <a href='{mainLink}' style='text-decoration:none; font-size:28px;'>
-                            <span style='color:#C444FF;'>GM</span><span style='color:#FFFFFF;'>Helper</span>
-                        </a>
-                    </h2>
-                    <p style='color:#fff;'>Hello,</p>
-                    <p style='color:#fff;'>Welcome to GMHelper!</p>
-                    <p style='color:#fff;'>Your registration has been completed successfully and your email address has been verified.</p>
-                    <p style='color:#fff;'>You can now sign in and start using all available features of the platform.</p>
-                    <p style='text-align:center; margin:30px 0;'>
-                        <a href='{mainLink}' style='display:inline-block; padding:12px 24px; background-color:#C444FF; color:#fff; text-decoration:none; border-radius:5px;'>Open GMHelper</a>
-                    </p>
-                    <p style='color:#fff;'>If you did not create this account, please contact support as soon as possible.</p>
-                    <hr style='border-color:#444;'/>
-                    <footer style='text-align:center; font-size:12px; color:#666;'>
-                        &copy; {DateTime.Now.Year} GMHelper. All rights reserved.
-                    </footer>
-                </div>";
-
-                using (var smtpClient = new SmtpClient(smtpHost, smtpPort))
-                {
-                    smtpClient.Credentials = new NetworkCredential(smtpUsername, smtpPassword);
-                    smtpClient.EnableSsl = true;
-
-                    var mailMessage = new MailMessage(fromAddress, toAddress)
-                    {
-                        Subject = subject,
-                        Body = body,
-                        IsBodyHtml = true
-                    };
-
-                    await smtpClient.SendMailAsync(mailMessage);
-
-                    _logger.LogInformation($"Registration success email successfully sent to {toEmail}.");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Failed to send registration success email to {toEmail}.");
-                throw;
-            }
+            await _notifyApiClient.SendNotificationAsync(request);
         }
 
         public async Task SendPasswordRecoveryEmailAsync(string toEmail, string token)
         {
-            var smtpHost = Environment.GetEnvironmentVariable("SMTP__Host");
-            var smtpPortString = Environment.GetEnvironmentVariable("SMTP_Port");
-            var smtpUsername = Environment.GetEnvironmentVariable("SMTP__Username");
-            var smtpPassword = Environment.GetEnvironmentVariable("SMTP__Password");
-            var smtpFrom = Environment.GetEnvironmentVariable("SMTP__From");
-
-            if (string.IsNullOrWhiteSpace(smtpHost) || string.IsNullOrWhiteSpace(smtpUsername) || string.IsNullOrWhiteSpace(smtpPassword) || string.IsNullOrWhiteSpace(smtpFrom))
+            var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
+            if (string.IsNullOrWhiteSpace(clientBaseUrl))
             {
-                throw new InvalidOperationException("SMTP configuration is missing in the environment variables.");
+                throw new InvalidOperationException("Client application base URL is not configured.");
             }
 
-            if (!int.TryParse(smtpPortString, out var smtpPort))
+            var recoveryLink = $"{clientBaseUrl.TrimEnd('/')}/recover?token={token}";
+            var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
+
+            var language = await _userManagementService.GetUserLanguageByEmail(toEmail);
+            var locale = NormalizeLocale(language);
+            var user = await _userRepository.GetUserByEmailAsync(toEmail);
+
+            _logger.LogInformation("Dispatching password recovery email request for {RecipientEmail} to notify-api", toEmail);
+
+            var request = new SendNotificationRequest
             {
-                throw new InvalidOperationException("Invalid SMTP port value.");
-            }
-
-            _logger.LogInformation($"Attempting to send password recovery email to {toEmail} using SMTP server {smtpHost} on port {smtpPort}.");
-
-            try
-            {
-                var fromAddress = new MailAddress(smtpFrom, "GMHelper");
-                var toAddress = new MailAddress(toEmail);
-
-                var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
-                if (string.IsNullOrWhiteSpace(clientBaseUrl))
+                TemplateKey = "auth.password_recovery",
+                Locale = locale,
+                ExternalUserId = user?.Id.ToString(),
+                RecipientEmail = toEmail,
+                RecipientName = user?.Username,
+                Variables = new Dictionary<string, object>
                 {
-                    throw new InvalidOperationException("Client application base URL is not configured.");
+                    { "mainLink", mainLink },
+                    { "recoveryLink", recoveryLink }
                 }
+            };
 
-                var recoveryLink = $"{clientBaseUrl.TrimEnd('/')}/recover?token={token}";
-                var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
-
-                var language = await _userManagementService.GetUserLanguageByEmail(toEmail);
-
-                var template = PasswordRecoveryMailProvider.Get(language, mainLink, recoveryLink);
-
-                using (var smtpClient = new SmtpClient(smtpHost, smtpPort))
-                {
-                    smtpClient.Credentials = new NetworkCredential(smtpUsername, smtpPassword);
-                    smtpClient.EnableSsl = true;
-
-                    var mailMessage = new MailMessage(fromAddress, toAddress)
-                    {
-                        Subject = template.Subject,
-                        Body = template.Body,
-                        IsBodyHtml = true
-                    };
-
-                    await smtpClient.SendMailAsync(mailMessage);
-
-                    _logger.LogInformation($"Password recovery email successfully sent to {toEmail}");
-                }
-            }
-            catch (Exception ex) {
-                _logger.LogError(ex, $"Failed to send password recovery email to {toEmail}");
-                throw;
-            }
+            await _notifyApiClient.SendNotificationAsync(request);
         }
 
         public async Task SendIpConfirmationCodeEmailAsync(string toEmail, string code)
         {
-            var smtpHost = Environment.GetEnvironmentVariable("SMTP__Host");
-            var smtpPortString = Environment.GetEnvironmentVariable("SMTP_Port");
-            var smtpUsername = Environment.GetEnvironmentVariable("SMTP__Username");
-            var smtpPassword = Environment.GetEnvironmentVariable("SMTP__Password");
-            var smtpFrom = Environment.GetEnvironmentVariable("SMTP__From");
-
-            if (string.IsNullOrWhiteSpace(smtpHost) || string.IsNullOrWhiteSpace(smtpUsername) || string.IsNullOrWhiteSpace(smtpPassword) || string.IsNullOrWhiteSpace(smtpFrom))
+            var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
+            if (string.IsNullOrWhiteSpace(clientBaseUrl))
             {
-                throw new InvalidOperationException("SMTP configuration is missing in the environment variables.");
+                throw new InvalidOperationException("Client application base URL is not configured.");
             }
 
-            if (!int.TryParse(smtpPortString, out var smtpPort))
+            var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
+
+            var language = await _userManagementService.GetUserLanguageByEmail(toEmail);
+            var locale = NormalizeLocale(language);
+            var user = await _userRepository.GetUserByEmailAsync(toEmail);
+
+            _logger.LogInformation("Dispatching IP confirmation code email request for {RecipientEmail} to notify-api", toEmail);
+
+            var request = new SendNotificationRequest
             {
-                throw new InvalidOperationException("Invalid SMTP port value.");
-            }
-
-            _logger.LogInformation($"Attempting to send IP confirmation code email to {toEmail} using SMTP server {smtpHost} on port {smtpPort}.");
-
-            try
-            {
-                var fromAddress = new MailAddress(smtpFrom, "GMHelper");
-                var toAddress = new MailAddress(toEmail);
-
-                var clientBaseUrl = _configuration["ClientApp:BaseUrl"];
-                if (string.IsNullOrWhiteSpace(clientBaseUrl))
+                TemplateKey = "auth.ip_confirmation",
+                Locale = locale,
+                ExternalUserId = user?.Id.ToString(),
+                RecipientEmail = toEmail,
+                RecipientName = user?.Username,
+                Variables = new Dictionary<string, object>
                 {
-                    throw new InvalidOperationException("Client application base URL is not configured.");
+                    { "mainLink", mainLink },
+                    { "code", code }
                 }
+            };
 
-                var mainLink = $"{clientBaseUrl.TrimEnd('/')}/";
-
-                var language = await _userManagementService.GetUserLanguageByEmail(toEmail);
-
-                var template = IpConfirmationMailProvider.Get(language, mainLink, code);
-
-                using (var smtpClient = new SmtpClient(smtpHost, smtpPort))
-                {
-                    smtpClient.Credentials = new NetworkCredential(smtpUsername, smtpPassword);
-                    smtpClient.EnableSsl = true;
-
-                    var mailMessage = new MailMessage(fromAddress, toAddress)
-                    {
-                        Subject = template.Subject,
-                        Body = template.Body,
-                        IsBodyHtml = true
-                    };
-
-                    await smtpClient.SendMailAsync(mailMessage);
-                    _logger.LogInformation($"IP confirmation code email successfully sent to {toEmail}.");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"Failed to send IP confirmation code email to {toEmail}.");
-                throw;
-            }
+            await _notifyApiClient.SendNotificationAsync(request);
         }
 
         public bool ValidateEmailFormatAsync(string email)
@@ -308,6 +181,18 @@ namespace MatHelper.BLL.Services
                 throw new ArgumentException("Invalid email domain.");
 
             return true;
+        }
+
+        private static string NormalizeLocale(string? language)
+        {
+            if (string.IsNullOrWhiteSpace(language))
+                return "en";
+
+            var normalized = language.Trim().ToLowerInvariant();
+            if (normalized == "ua")
+                return "uk";
+
+            return normalized;
         }
     }
 }

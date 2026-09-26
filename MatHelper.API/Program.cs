@@ -33,6 +33,7 @@ builder.Configuration.AddJsonFile(
     reloadOnChange: false);
 
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddMemoryCache();
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<RequestLoggingFilter>();
@@ -188,6 +189,14 @@ builder.Services.Configure<NotifyApiOptions>(options =>
 });
 
 builder.Services.AddHttpClient<IAutomationEventPublisher, AutomationEventPublisher>((provider, client) =>
+{
+    var options = provider.GetRequiredService<IOptions<NotifyApiOptions>>().Value;
+    var baseUrl = (string.IsNullOrWhiteSpace(options.BaseUrl) ? "http://localhost:8080" : options.BaseUrl).TrimEnd('/') + "/";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds > 0 ? options.TimeoutSeconds : 10);
+});
+
+builder.Services.AddHttpClient<INotifyApiClient, NotifyApiClient>((provider, client) =>
 {
     var options = provider.GetRequiredService<IOptions<NotifyApiOptions>>().Value;
     var baseUrl = (string.IsNullOrWhiteSpace(options.BaseUrl) ? "http://localhost:8080" : options.BaseUrl).TrimEnd('/') + "/";
