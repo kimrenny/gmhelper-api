@@ -93,7 +93,9 @@ public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProg
             services.AddScoped<IRequestLogService, RequestLogService>();
             services.AddScoped<IAdminSettingsService, AdminSettingsService>();
             services.AddScoped<IRecoveryService, RecoveryService>();
-            services.AddScoped<IMailService, MockMailService>();
+            services.AddScoped<IMailService, MailService>();
+            services.AddSingleton<MockNotifyApiClient>();
+            services.AddSingleton<INotifyApiClient>(sp => sp.GetRequiredService<MockNotifyApiClient>());
             services.AddSingleton<MockAutomationEventPublisher>();
             services.AddSingleton<IAutomationEventPublisher>(sp => sp.GetRequiredService<MockAutomationEventPublisher>());
             services.AddScoped<IGeoTaskProcessingService, GeoTaskProcessingService>();
@@ -126,5 +128,11 @@ public class CustomWebApplicationFactory<TProgram> : WebApplicationFactory<TProg
 
         db.Database.EnsureDeleted();
         db.Database.EnsureCreated();
+
+        var notifyClient = Services.GetService<MockNotifyApiClient>();
+        notifyClient?.SentNotifications.Clear();
+
+        var eventPublisher = Services.GetService<MockAutomationEventPublisher>();
+        eventPublisher?.PublishedEvents.Clear();
     }
 }

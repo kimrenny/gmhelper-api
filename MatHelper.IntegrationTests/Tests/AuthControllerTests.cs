@@ -307,5 +307,95 @@ namespace MatHelper.IntegrationTests.Tests
             });
             Assert.Equal(HttpStatusCode.OK, loginWithNew.StatusCode);
         }
+
+        [Fact]
+        public async Task AuthEndpoints_DispatchEmailsThroughNotifyApiClient_Successfully()
+        {
+            var notifyClient = _factory.Services.GetRequiredService<MockNotifyApiClient>();
+
+            var email = $"notify_user_{Guid.NewGuid()}@example.com";
+            var userName = $"user_{Guid.NewGuid():N}";
+
+            // 1. Request registration code -> dispatches auth.register_code to notify-api
+            var initDto = new RegisterRequestDto
+            {
+                Email = email,
+                UserName = userName,
+                CaptchaToken = "valid-captcha"
+            };
+
+            var codeResp = await _client.PostAsJsonAsync("api/v1/auth/register/code", initDto);
+            Assert.Equal(HttpStatusCode.OK, codeResp.StatusCode);
+
+            var regCodeNotifications = notifyClient.SentNotifications
+                .Where(n => n.TemplateKey == "auth.register_code" && n.RecipientEmail == email)
+                .ToList();
+
+            Assert.Single(regCodeNotifications);
+            var regCodeNotif = regCodeNotifications[0];
+            Assert.Equal("auth.register_code", regCodeNotif.TemplateKey);
+            Assert.Equal("en", regCodeNotif.Locale);
+            Assert.Equal(email, regCodeNotif.RecipientEmail);
+            Assert.Null(regCodeNotif.ExternalUserId);
+            Assert.NotNull(regCodeNotif.Variables);
+            Assert.True(regCodeNotif.Variables.ContainsKey("code"));
+            Assert.True(regCodeNotif.Variables.ContainsKey("mainLink"));
+
+            string code;
+            using (var scope = _factory.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                code = await db.EmailLoginCodes
+                    .Where(x => x.Email == email)
+                    .OrderByDescending(x => x.Id)
+                    .Select(x => x.Code)
+                    .FirstAsync();
+            }
+
+            // 2. Complete registration -> dispatches auth.welcome to notify-api
+            var registerDto = new UserDto
+            {
+                Email = email,
+                UserName = userName,
+                Password = "Password123!",
+                Token = code
+            };
+
+            var registerResp = await _client.PostAsJsonAsync("api/v1/auth/register", registerDto);
+            Assert.Equal(HttpStatusCode.OK, registerResp.StatusCode);
+
+            var welcomeNotifications = notifyClient.SentNotifications
+                .Where(n => n.TemplateKey == "auth.welcome" && n.RecipientEmail == email)
+                .ToList();
+
+            Assert.Single(welcomeNotifications);
+            var welcomeNotif = welcomeNotifications[0];
+            Assert.Equal("auth.welcome", welcomeNotif.TemplateKey);
+            Assert.Equal(email, welcomeNotif.RecipientEmail);
+            Assert.NotNull(welcomeNotif.ExternalUserId);
+            Assert.NotNull(welcomeNotif.Variables);
+            Assert.True(welcomeNotif.Variables.ContainsKey("mainLink"));
+
+            // 3. Request password recovery -> dispatches auth.password_recovery to notify-api
+            var recoverResp = await _client.PostAsJsonAsync("api/v1/auth/password/recover/request", new PasswordRecoveryEmailDto
+            {
+                Email = email,
+                CaptchaToken = "valid-captcha"
+            });
+            Assert.Equal(HttpStatusCode.OK, recoverResp.StatusCode);
+
+            var recoverNotifications = notifyClient.SentNotifications
+                .Where(n => n.TemplateKey == "auth.password_recovery" && n.RecipientEmail == email)
+                .ToList();
+
+            Assert.Single(recoverNotifications);
+            var recoverNotif = recoverNotifications[0];
+            Assert.Equal("auth.password_recovery", recoverNotif.TemplateKey);
+            Assert.Equal(email, recoverNotif.RecipientEmail);
+            Assert.NotNull(recoverNotif.ExternalUserId);
+            Assert.NotNull(recoverNotif.Variables);
+            Assert.True(recoverNotif.Variables.ContainsKey("mainLink"));
+            Assert.True(recoverNotif.Variables.ContainsKey("recoveryLink"));
+        }
     }
 }
