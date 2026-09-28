@@ -1,4 +1,4 @@
-﻿using MatHelper.BLL.Interfaces;
+using MatHelper.BLL.Interfaces;
 using MatHelper.CORE.Models;
 using MatHelper.DAL.Models;
 using MatHelper.DAL.Interfaces;
@@ -12,7 +12,7 @@ namespace MatHelper.BLL.Services
 {
     public class GeoTaskProcessingService : IGeoTaskProcessingService
     {
-        private readonly SolutionHub.SolutionHubService.SolutionHubServiceClient _solutionHubClient;
+        private readonly SolutionHub.SolutionHub.SolutionHubClient _solutionHubClient;
 
         private readonly ITaskRequestRepository _taskRequestRepository;
         private readonly ITaskRatingRepository _taskRatingRepository;
@@ -25,7 +25,7 @@ namespace MatHelper.BLL.Services
         private const string GeoTaskFolderName = "Geo";
         private const string JsonFileExtension = ".json";
 
-        public GeoTaskProcessingService(SolutionHub.SolutionHubService.SolutionHubServiceClient solutionHubClient, ITaskRequestRepository taskRequestRepository, ITaskRatingRepository taskRatingRepository, ILogger<GeoTaskProcessingService> logger)
+        public GeoTaskProcessingService(SolutionHub.SolutionHub.SolutionHubClient solutionHubClient, ITaskRequestRepository taskRequestRepository, ITaskRatingRepository taskRatingRepository, ILogger<GeoTaskProcessingService> logger)
         {
             _solutionHubClient = solutionHubClient;
             _taskRequestRepository = taskRequestRepository;
@@ -79,16 +79,17 @@ namespace MatHelper.BLL.Services
 
             try
             {
-                var request = new SubmitTaskRequest
+                var request = new SolveProblemRequest
                 {
                     TaskId = taskId,
-                    TaskJson = JsonSerializer.Serialize(task),
+                    ProblemType = "geo",
+                    Payload = JsonSerializer.Serialize(task),
                     UserId = userId?.ToString() ?? ""
                 };
 
-                var response = await _solutionHubClient.SubmitTaskAsync(request);
+                var response = await _solutionHubClient.SolveProblemAsync(request);
 
-                _logger.LogInformation("Task sent to SolutionHub. TaskId: {TaskId}, Status: {Status}", taskId, response.Status);
+                _logger.LogInformation("Task sent to SolutionHub. TaskId: {TaskId}, Success: {Success}, Result: {Result}", taskId, response.Success, response.Result);
             }
             catch (Exception ex)
             {

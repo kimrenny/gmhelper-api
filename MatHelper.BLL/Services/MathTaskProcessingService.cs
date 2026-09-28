@@ -1,4 +1,4 @@
-﻿using MatHelper.DAL.Models;
+using MatHelper.DAL.Models;
 using MatHelper.DAL.Interfaces;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -11,7 +11,7 @@ namespace MatHelper.BLL.Services
 {
     public class MathTaskProcessingService : IMathTaskProcessingService
     {
-        private readonly SolutionHub.SolutionHubService.SolutionHubServiceClient _solutionHubClient;
+        private readonly SolutionHub.SolutionHub.SolutionHubClient _solutionHubClient;
 
         private readonly ITaskRequestRepository _taskRequestRepository;
         private readonly ITaskRatingRepository _taskRatingRepository;
@@ -24,7 +24,7 @@ namespace MatHelper.BLL.Services
         private const string MathTaskFolderName = "Math";
         private const string JsonFileExtension = ".json";
 
-        public MathTaskProcessingService(SolutionHub.SolutionHubService.SolutionHubServiceClient solutionHubClient, ITaskRequestRepository taskRequestRepository, ITaskRatingRepository taskRatingRepository, ILogger<MathTaskProcessingService> logger)
+        public MathTaskProcessingService(SolutionHub.SolutionHub.SolutionHubClient solutionHubClient, ITaskRequestRepository taskRequestRepository, ITaskRatingRepository taskRatingRepository, ILogger<MathTaskProcessingService> logger)
         {
             _solutionHubClient = solutionHubClient;
             _taskRequestRepository = taskRequestRepository;
@@ -66,16 +66,17 @@ namespace MatHelper.BLL.Services
 
             try
             {
-                var request = new SubmitTaskRequest
+                var request = new SolveProblemRequest
                 {
                     TaskId = taskId,
-                    TaskJson = JsonSerializer.Serialize(taskData),
+                    ProblemType = "math",
+                    Payload = JsonSerializer.Serialize(taskData),
                     UserId = userId?.ToString() ?? ""
                 };
 
-                var response = await _solutionHubClient.SubmitTaskAsync(request);
+                var response = await _solutionHubClient.SolveProblemAsync(request);
 
-                _logger.LogInformation("Task sent to SolutionHub. TaskId: {TaskId}, Status: {Status}", taskId, response.Status);
+                _logger.LogInformation("Task sent to SolutionHub. TaskId: {TaskId}, Success: {Success}, Result: {Result}", taskId, response.Success, response.Result);
             }
             catch (Exception ex)
             {

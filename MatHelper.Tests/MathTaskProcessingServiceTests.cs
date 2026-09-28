@@ -1,4 +1,4 @@
-﻿using MatHelper.BLL.Services;
+using MatHelper.BLL.Services;
 using MatHelper.DAL.Interfaces;
 using MatHelper.DAL.Models;
 using Microsoft.Extensions.Logging;
@@ -12,7 +12,7 @@ namespace MatHelper.Tests.BLL
 {
     public class MathTaskProcessingServiceTests
     {
-        private readonly Mock<SolutionHubService.SolutionHubServiceClient> _solutionHubMock = new();
+        private readonly Mock<SolutionHub.SolutionHub.SolutionHubClient> _solutionHubMock = new();
         private readonly Mock<ITaskRequestRepository> _taskRequestRepositoryMock;
         private readonly Mock<ITaskRatingRepository> _taskRatingRepositoryMock;
         private readonly Mock<ILogger<MathTaskProcessingService>> _loggerMock;

@@ -1,4 +1,4 @@
-﻿using MatHelper.BLL.Services;
+using MatHelper.BLL.Services;
 using MatHelper.CORE.Enums;
 using MatHelper.CORE.Models;
 using MatHelper.DAL.Interfaces;
@@ -16,7 +16,7 @@ namespace MatHelper.Tests
         private readonly Mock<ITaskRequestRepository> _taskRequestRepoMock = new();
         private readonly Mock<ITaskRatingRepository> _taskRatingRepoMock = new();
         private readonly Mock<ILogger<GeoTaskProcessingService>> _loggerMock = new();
-        private readonly Mock<SolutionHubService.SolutionHubServiceClient> _solutionHubMock = new();
+        private readonly Mock<SolutionHub.SolutionHub.SolutionHubClient> _solutionHubMock = new();
         private readonly GeoTaskProcessingService _service;
 
         public GeoTaskProcessingServiceTests()
