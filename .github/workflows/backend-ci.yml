@@ -29,9 +29,21 @@ jobs:
       ConnectionStrings__DefaultConnection: ${{ secrets.ConnectionStrings__DefaultConnection }}
       ConnectionStrings__Redis: redis:6379
 
+    defaults:
+      run:
+        working-directory: gmhelper-api
+
     steps:
-      - name: Checkout
+      - name: Checkout Backend
         uses: actions/checkout@v4
+        with:
+          path: gmhelper-api
+
+      - name: Checkout Contracts
+        uses: actions/checkout@v4
+        with:
+          repository: kimrenny/gmhelper.contracts
+          path: gmhelper.contracts
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
