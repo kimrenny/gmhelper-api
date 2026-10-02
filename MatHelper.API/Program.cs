@@ -204,9 +204,12 @@ builder.Services.AddHttpClient<INotifyApiClient, NotifyApiClient>((provider, cli
     client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds > 0 ? options.TimeoutSeconds : 10);
 });
 
-builder.Services.AddGrpcClient<SolutionHubService.SolutionHubServiceClient>(options =>
+builder.Services.AddGrpcClient<SolutionHub.SolutionHub.SolutionHubClient>(options =>
 {
-    options.Address = new Uri(Environment.GetEnvironmentVariable("SOLUTION_HUB_URL") ?? "http://solution-hub:50051");
+    var defaultUrl = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("IntegrationTest")
+        ? "http://localhost:50051"
+        : "http://solution-hub:50051";
+    options.Address = new Uri(Environment.GetEnvironmentVariable("SOLUTION_HUB_URL") ?? defaultUrl);
 });
 
 

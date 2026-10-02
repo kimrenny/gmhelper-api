@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-	<Protobuf Include="solution_hub.proto" GrpcServices="Client" />
+	<Protobuf Include="..\..\gmhelper.contracts\solution_hub.proto" Link="solution_hub.proto" GrpcServices="Client" />
   </ItemGroup>
 
   <ItemGroup>
