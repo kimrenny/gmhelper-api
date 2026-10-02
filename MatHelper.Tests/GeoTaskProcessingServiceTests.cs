@@ -1,11 +1,11 @@
+using Grpc.Core;
 using MatHelper.BLL.Services;
 using MatHelper.CORE.Enums;
-using MatHelper.CORE.Models;
 using MatHelper.DAL.Interfaces;
 using MatHelper.DAL.Models;
-using SolutionHub;
 using Microsoft.Extensions.Logging;
 using Moq;
+using SolutionHub;
 using System.Text.Json;
 using Xunit;
 
@@ -28,6 +28,60 @@ namespace MatHelper.Tests
                 _loggerMock.Object
             );
         }
+
+        private static AsyncUnaryCall<SolveProblemResponse> CreateGrpcCall(SolveProblemResponse response)
+        {
+            return new AsyncUnaryCall<SolveProblemResponse>(
+                Task.FromResult(response),
+                Task.FromResult(new Metadata()),
+                () => Status.DefaultSuccess,
+                () => new Metadata(),
+                () => { });
+        }
+
+        private static string ValidGeometryResultJson() =>
+            JsonSerializer.Serialize(new
+            {
+                problemType = "geometry",
+                status = "completed",
+                problemStatement = "Given triangle ABC with AB = BC = 5, AC = 6",
+                inputFacts = new
+                {
+                    figures = new[]
+                    {
+                        new { id = "triangle_1", type = "triangle", vertices = new[] { "A", "B", "C" } }
+                    },
+                    lengths = new Dictionary<string, double> { ["AB"] = 5.0, ["BC"] = 5.0, ["AC"] = 6.0 },
+                    angles = new Dictionary<string, double>()
+                },
+                target = new
+                {
+                    descriptions = new[] { "Altitude BH", "Area S" },
+                    variables = new[] { "BH", "S" }
+                },
+                derivedFacts = new
+                {
+                    auxiliaryConstructions = new[]
+                    {
+                        new { type = "altitude", label = "BH", fromVertex = "B", toSegment = "AC", footPoint = "H" }
+                    },
+                    lengths = new Dictionary<string, double> { ["BH"] = 4.0 },
+                    angles = new Dictionary<string, double>(),
+                    metrics = new Dictionary<string, double> { ["area"] = 12.0, ["perimeter"] = 16.0 }
+                },
+                steps = new[]
+                {
+                    new
+                    {
+                        stepNumber = 1,
+                        title = "Pythagorean Theorem",
+                        explanation = "In right triangle ABH, BH = sqrt(AB^2 - AH^2)",
+                        latexFormula = "BH = 4"
+                    }
+                },
+                finalAnswer = "Altitude BH = 4, Area S = 12, Perimeter P = 16",
+                latexAnswer = "BH = 4,\\; S = 12"
+            });
 
         [Fact]
         public async Task CanProcessRequestAsync_ShouldAllow_WhenUserIdProvided()
@@ -73,19 +127,152 @@ namespace MatHelper.Tests
         }
 
         [Fact]
-        public async Task ProcessTaskAsync_ShouldSaveFile_AndLogRequest()
+        public async Task ProcessTaskAsync_Success_ShouldCallHub_AndPersistStructuredResult()
         {
-            var json = JsonDocument.Parse("{\"rectangle_1\": {}}").RootElement;
+            SolveProblemRequest? capturedRequest = null;
+            _solutionHubMock
+                .Setup(s => s.SolveProblemAsync(It.IsAny<SolveProblemRequest>(), null, null, default))
+                .Callback<SolveProblemRequest, Metadata, DateTime?, CancellationToken>((req, _, _, _) => capturedRequest = req)
+                .Returns(CreateGrpcCall(new SolveProblemResponse
+                {
+                    TaskId = "geo-task-1",
+                    Status = "completed",
+                    Result = ValidGeometryResultJson(),
+                    Success = true
+                }));
 
-            var taskId = await _service.ProcessTaskAsync(json, "127.0.0.1", null);
+            var userId = Guid.NewGuid();
+            var canvasJson = """
+            {
+                "triangle_1": {
+                    "points": [{"label": "A"}, {"label": "B"}, {"label": "C"}],
+                    "lines": {"AB": 5.0, "BC": 5.0, "AC": 6.0},
+                    "angles": {}
+                }
+            }
+            """;
+            var json = JsonDocument.Parse(canvasJson).RootElement;
+
+            var taskId = await _service.ProcessTaskAsync(json, "127.0.0.1", userId);
 
             Assert.False(string.IsNullOrEmpty(taskId));
-            _taskRequestRepoMock.Verify(r => r.AddRequestAsync(It.Is<TaskRequestLog>(t => t.TaskId == taskId)), Times.Once);
 
+            // Verify gRPC call parameters
+            _solutionHubMock.Verify(s => s.SolveProblemAsync(It.IsAny<SolveProblemRequest>(), null, null, default), Times.Once);
+            Assert.NotNull(capturedRequest);
+            Assert.Equal(taskId, capturedRequest.TaskId);
+            Assert.Equal("geometry", capturedRequest.ProblemType);
+            Assert.Equal(userId.ToString(), capturedRequest.UserId);
+
+            // Payload assertion: deserialize payload and verify geometric facts are preserved
+            using var payloadDoc = JsonDocument.Parse(capturedRequest.Payload);
+            var payloadRoot = payloadDoc.RootElement;
+            Assert.True(payloadRoot.TryGetProperty("triangle_1", out var triProp));
+            Assert.True(triProp.TryGetProperty("lines", out var linesProp));
+            Assert.Equal(5.0, linesProp.GetProperty("AB").GetDouble());
+            Assert.Equal(6.0, linesProp.GetProperty("AC").GetDouble());
+
+            // Verify file persistence
             var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Tasks", "Geo", $"{taskId}.json");
             Assert.True(File.Exists(filePath));
 
+            var content = await File.ReadAllTextAsync(filePath);
+            using var fileDoc = JsonDocument.Parse(content);
+            var root = fileDoc.RootElement;
+
+            // Original task canvas remains intact
+            Assert.True(root.TryGetProperty("task", out var savedTask));
+            Assert.True(savedTask.TryGetProperty("triangle_1", out _));
+
+            // Given section is preserved
+            Assert.True(root.TryGetProperty("given", out var savedGiven));
+            Assert.Contains("triangle", savedGiven.GetString() ?? "");
+
+            // Structured solution is saved
+            Assert.True(root.TryGetProperty("solution", out var savedSolution));
+            Assert.Equal("completed", savedSolution.GetProperty("status").GetString());
+
+            // Answer is extracted from finalAnswer
+            Assert.True(root.TryGetProperty("answer", out var savedAnswer));
+            Assert.Equal("Altitude BH = 4, Area S = 12, Perimeter P = 16", savedAnswer.GetString());
+
+            _taskRequestRepoMock.Verify(r => r.AddRequestAsync(It.Is<TaskRequestLog>(t => t.TaskId == taskId)), Times.Once);
+
             File.Delete(filePath);
+        }
+
+        [Fact]
+        public async Task ProcessTaskAsync_HubFails_ShouldThrow_AndNotPersistFile()
+        {
+            _solutionHubMock
+                .Setup(s => s.SolveProblemAsync(It.IsAny<SolveProblemRequest>(), null, null, default))
+                .Returns(CreateGrpcCall(new SolveProblemResponse
+                {
+                    TaskId = "fail-task",
+                    Status = "error",
+                    Result = "",
+                    Success = false
+                }));
+
+            var json = JsonDocument.Parse("{\"triangle_1\": {}}").RootElement;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.ProcessTaskAsync(json, "127.0.0.1", null));
+
+            _taskRequestRepoMock.Verify(r => r.AddRequestAsync(It.IsAny<TaskRequestLog>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task ProcessTaskAsync_EmptyResult_ShouldThrow()
+        {
+            _solutionHubMock
+                .Setup(s => s.SolveProblemAsync(It.IsAny<SolveProblemRequest>(), null, null, default))
+                .Returns(CreateGrpcCall(new SolveProblemResponse
+                {
+                    TaskId = "empty-task",
+                    Status = "completed",
+                    Result = "   ",
+                    Success = true
+                }));
+
+            var json = JsonDocument.Parse("{\"triangle_1\": {}}").RootElement;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.ProcessTaskAsync(json, "127.0.0.1", null));
+        }
+
+        [Fact]
+        public async Task ProcessTaskAsync_InvalidJsonResult_ShouldThrow()
+        {
+            _solutionHubMock
+                .Setup(s => s.SolveProblemAsync(It.IsAny<SolveProblemRequest>(), null, null, default))
+                .Returns(CreateGrpcCall(new SolveProblemResponse
+                {
+                    TaskId = "invalid-task",
+                    Status = "completed",
+                    Result = "malformed response",
+                    Success = true
+                }));
+
+            var json = JsonDocument.Parse("{\"triangle_1\": {}}").RootElement;
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.ProcessTaskAsync(json, "127.0.0.1", null));
+        }
+
+        [Fact]
+        public async Task ProcessTaskAsync_GrpcThrows_ShouldThrow()
+        {
+            _solutionHubMock
+                .Setup(s => s.SolveProblemAsync(It.IsAny<SolveProblemRequest>(), null, null, default))
+                .Throws(new RpcException(new Status(StatusCode.DeadlineExceeded, "Request timed out")));
+
+            var json = JsonDocument.Parse("{\"triangle_1\": {}}").RootElement;
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                _service.ProcessTaskAsync(json, "127.0.0.1", null));
+
+            Assert.Contains("SolutionHub", ex.Message);
         }
 
         [Fact]

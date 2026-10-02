@@ -62,30 +62,89 @@ namespace MatHelper.BLL.Services
                 _logger.LogInformation("Created task directory at: {FolderPath}", folderPath);
             }
 
-            string filePath = Path.Combine(folderPath, $"{taskId}.json");
+            string filePath = Path.Combine(folderPath, $"{taskId}{JsonFileExtension}");
 
+            var request = new SolveProblemRequest
+            {
+                TaskId = taskId,
+                ProblemType = "math",
+                Payload = taskData.GetRawText(),
+                UserId = userId?.ToString() ?? ""
+            };
+
+            SolveProblemResponse response;
             try
             {
-                var request = new SolveProblemRequest
-                {
-                    TaskId = taskId,
-                    ProblemType = "math",
-                    Payload = JsonSerializer.Serialize(taskData),
-                    UserId = userId?.ToString() ?? ""
-                };
-
-                var response = await _solutionHubClient.SolveProblemAsync(request);
-
-                _logger.LogInformation("Task sent to SolutionHub. TaskId: {TaskId}, Success: {Success}, Result: {Result}", taskId, response.Success, response.Result);
+                response = await _solutionHubClient.SolveProblemAsync(request);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to send task to SolutionHub. TaskId: {TaskId}", taskId);
+                _logger.LogError(ex, "gRPC call to SolutionHub failed for Math task. TaskId: {TaskId}", taskId);
+                throw new InvalidOperationException("Failed to solve mathematical problem via SolutionHub.", ex);
             }
 
-            var solution = await GenerateSolutionAsync(taskData);
+            if (response == null || !response.Success || string.IsNullOrWhiteSpace(response.Result))
+            {
+                _logger.LogError("SolutionHub returned unsuccessful response for Math task. TaskId: {TaskId}, Success: {Success}, Status: {Status}",
+                    taskId, response?.Success, response?.Status);
+                throw new InvalidOperationException("SolutionHub failed to generate a valid mathematical solution.");
+            }
 
-            await File.WriteAllTextAsync(filePath, JsonSerializer.Serialize(taskData));
+            JsonElement solutionElement;
+            try
+            {
+                using var solutionDoc = JsonDocument.Parse(response.Result);
+                solutionElement = solutionDoc.RootElement.Clone();
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "SolutionHub returned malformed JSON for Math task. TaskId: {TaskId}", taskId);
+                throw new InvalidOperationException("SolutionHub returned malformed solution JSON.", ex);
+            }
+
+            if (!solutionElement.TryGetProperty("compositeLatex", out var compositeLatexProp) ||
+                compositeLatexProp.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(compositeLatexProp.GetString()))
+            {
+                _logger.LogError("SolutionHub response is missing valid compositeLatex for Math task. TaskId: {TaskId}", taskId);
+                throw new InvalidOperationException("SolutionHub returned an invalid solution missing compositeLatex.");
+            }
+
+            string compositeLatex = compositeLatexProp.GetString()!;
+
+            string originalProblem = "";
+            if (taskData.ValueKind == JsonValueKind.Object)
+            {
+                if (taskData.TryGetProperty("data", out var inputDataProp) && inputDataProp.ValueKind == JsonValueKind.String)
+                {
+                    originalProblem = inputDataProp.GetString() ?? "";
+                }
+                else if (taskData.TryGetProperty("problem", out var probProp) && probProp.ValueKind == JsonValueKind.String)
+                {
+                    originalProblem = probProp.GetString() ?? "";
+                }
+                else
+                {
+                    originalProblem = taskData.GetRawText();
+                }
+            }
+            else if (taskData.ValueKind == JsonValueKind.String)
+            {
+                originalProblem = taskData.GetString() ?? "";
+            }
+            else
+            {
+                originalProblem = taskData.GetRawText();
+            }
+
+            var persistedData = new Dictionary<string, object>
+            {
+                ["data"] = compositeLatex,
+                ["problem"] = originalProblem,
+                ["solution"] = solutionElement
+            };
+
+            await File.WriteAllTextAsync(filePath, JsonSerializer.Serialize(persistedData));
             _logger.LogInformation("Saved task JSON to file: {FilePath}", filePath);
 
             var log = new TaskRequestLog
@@ -134,11 +193,6 @@ namespace MatHelper.BLL.Services
         {
             var requestLog = await _taskRequestRepository.GetRequestByTaskIdAsync(taskid);
             return requestLog?.UserId;
-        }
-
-        private Task<object> GenerateSolutionAsync(JsonElement taskData) 
-        {
-            return Task.FromResult<Object>(new { });
         }
     }
 }

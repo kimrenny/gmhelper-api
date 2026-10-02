@@ -66,35 +66,62 @@ namespace MatHelper.BLL.Services
             string filePath = Path.Combine(folderPath, $"{taskId}{JsonFileExtension}");
 
             var given = await GenerateGivenSectionAsync(taskData);
-            var solution = await GenerateSolutionAsync(taskData);
-            var answer = await GenerateAnswerAsync(taskData);
+
+            var request = new SolveProblemRequest
+            {
+                TaskId = taskId,
+                ProblemType = "geometry",
+                Payload = taskData.GetRawText(),
+                UserId = userId?.ToString() ?? ""
+            };
+
+            SolveProblemResponse response;
+            try
+            {
+                response = await _solutionHubClient.SolveProblemAsync(request);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "gRPC call to SolutionHub failed for Geometry task. TaskId: {TaskId}", taskId);
+                throw new InvalidOperationException("Failed to solve geometry problem via SolutionHub.", ex);
+            }
+
+            if (response == null || !response.Success || string.IsNullOrWhiteSpace(response.Result))
+            {
+                _logger.LogError("SolutionHub returned unsuccessful response for Geometry task. TaskId: {TaskId}, Success: {Success}, Status: {Status}",
+                    taskId, response?.Success, response?.Status);
+                throw new InvalidOperationException("SolutionHub failed to generate a valid geometry solution.");
+            }
+
+            JsonElement solutionElement;
+            try
+            {
+                using var solutionDoc = JsonDocument.Parse(response.Result);
+                solutionElement = solutionDoc.RootElement.Clone();
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "SolutionHub returned malformed JSON for Geometry task. TaskId: {TaskId}", taskId);
+                throw new InvalidOperationException("SolutionHub returned malformed geometry solution JSON.", ex);
+            }
+
+            string answer = "...";
+            if (solutionElement.TryGetProperty("finalAnswer", out var finalAnswerProp) && finalAnswerProp.ValueKind == JsonValueKind.String)
+            {
+                var fa = finalAnswerProp.GetString();
+                if (!string.IsNullOrWhiteSpace(fa))
+                {
+                    answer = fa;
+                }
+            }
 
             var task = new
             {
                 task = taskData,
                 given,
-                solution,
+                solution = solutionElement,
                 answer
             };
-
-            try
-            {
-                var request = new SolveProblemRequest
-                {
-                    TaskId = taskId,
-                    ProblemType = "geo",
-                    Payload = JsonSerializer.Serialize(task),
-                    UserId = userId?.ToString() ?? ""
-                };
-
-                var response = await _solutionHubClient.SolveProblemAsync(request);
-
-                _logger.LogInformation("Task sent to SolutionHub. TaskId: {TaskId}, Success: {Success}, Result: {Result}", taskId, response.Success, response.Result);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to send task to SolutionHub. TaskId: {TaskId}", taskId);
-            }
 
             await File.WriteAllTextAsync(filePath, JsonSerializer.Serialize(task));
             _logger.LogInformation("Saved task JSON to file: {FilePath}", filePath);
@@ -110,8 +137,6 @@ namespace MatHelper.BLL.Services
 
             await _taskRequestRepository.AddRequestAsync(log);
 
-            // await Task.Delay(3000);
-
             _logger.LogInformation("Task log saved. TaskId: {TaskId}, IP: {Ip}, UserId: {UserId}", taskId, ip, userId.ToString() ?? "Anonymous");
 
             return taskId;
@@ -119,7 +144,7 @@ namespace MatHelper.BLL.Services
 
         public async Task<JsonElement> GetTaskAsync(string id)
         {
-            var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "Tasks", "Geo", $"{id}{JsonFileExtension}");
+            var filePath = Path.Combine(Directory.GetCurrentDirectory(), WebRootFolderName, TasksFolderName, GeoTaskFolderName, $"{id}{JsonFileExtension}");
 
             if (!File.Exists(filePath))
                 throw new FileNotFoundException();
@@ -221,15 +246,6 @@ namespace MatHelper.BLL.Services
             return Task.FromResult(string.Join("\n", result));
         }
 
-        private Task<object> GenerateSolutionAsync(JsonElement taskData) 
-        {
-            return Task.FromResult<Object>(new { });
-        }
-
-        private Task<string> GenerateAnswerAsync(JsonElement taskData)
-        {
-            return Task.FromResult("...");
-        }
 
         private bool AllSidesEqual(JsonElement figure)
         {
